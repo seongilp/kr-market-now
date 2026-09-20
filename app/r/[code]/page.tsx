@@ -7,7 +7,7 @@ import { ChangeMap } from '@/components/change-map';
 import { RateBar } from '@/components/rate-bar';
 import { Stat } from '@/components/stat';
 import { UpjongCheck } from '@/components/upjong-check';
-import { changes, dongList, getSigungu, meta, pct, quarterLabel, sigunguList, signed } from '@/lib/data';
+import { changes, dongList, getSigungu, meta, pct, quarterLabel, regionCenter, sigunguList, signed } from '@/lib/data';
 import type { ChangeItem, DongSummary } from '@/lib/data-types';
 import { regionType, specialization } from '@/lib/diagnose';
 import { national, realBrands, regionInsights, sumStores } from '@/lib/insights';
@@ -65,6 +65,7 @@ export default async function RegionPage({ params }: PageProps<'/r/[code]'>) {
   const brandUp = [...brandsOk].sort((a, b) => b.stores - b.prevStores - (a.stores - a.prevStores)).filter((b) => b.stores > b.prevStores).slice(0, 5);
   const brandDown = [...brandsOk].sort((a, b) => a.stores - a.prevStores - (b.stores - b.prevStores)).filter((b) => b.stores < b.prevStores).slice(0, 5);
   const byStores = [...dongs].sort((a, b) => b.stores - a.stores);
+  const center = regionCenter(code);
 
   return (
     <div className="space-y-10">
@@ -181,6 +182,14 @@ export default async function RegionPage({ params }: PageProps<'/r/[code]'>) {
         <h2 className="mb-1 text-lg font-semibold">지도에서 보기</h2>
         <p className="mb-3 text-sm text-muted-foreground">파란 점이 새로 생긴 곳, 빨간 점이 사라진 곳. 점을 누르면 상호와 업종이 나옵니다.</p>
         <ChangeMap code={region.code} regionName={region.name} />
+        {center && (
+          <Link
+            href={`/map?lat=${center.lat}&lng=${center.lon}&z=12.5`}
+            className="mt-2 inline-block text-sm font-medium text-primary hover:underline"
+          >
+            전국 지도에서 이 동네 보기 →
+          </Link>
+        )}
       </section>
 
       <section>

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from 'maplibre-gl';
+import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
 import type { ChangeItem, SigunguChanges } from '@/lib/data-types';

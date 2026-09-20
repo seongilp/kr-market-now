@@ -6,7 +6,8 @@ import path from 'node:path';
 import metaJson from '@/data/meta.json';
 import sigunguJson from '@/data/sigungu.json';
 import upjongJson from '@/data/upjong.json';
-import type { DongSummary, Meta, SigunguChanges, SigunguSummary, UpjongRank, UpjongTable } from '@/lib/data-types';
+import dotsJson from '@/data/dots.json';
+import type { DongSummary, Dot, Meta, SigunguChanges, SigunguSummary, UpjongRank, UpjongTable } from '@/lib/data-types';
 
 /** 작은 파일은 번들에 직접 싣고, 시군구별 파일은 빌드 시점에 디스크에서 읽는다(페이지는 전부 정적 생성). */
 export const meta = metaJson as Meta;
@@ -48,4 +49,16 @@ export function pct(value: number): string {
 
 export function signed(value: number): string {
   return value > 0 ? `+${value.toLocaleString()}` : value.toLocaleString();
+}
+
+const DOTS = dotsJson as Dot[];
+
+/** 시군구의 대표 좌표 — 그 시군구 동네 원들의 평균. 동네가 없으면 undefined */
+export function regionCenter(code: string): { lat: number; lon: number } | undefined {
+  const mine = DOTS.filter((d) => d.sigunguCode === code);
+  if (mine.length === 0) return undefined;
+  return {
+    lat: Number((mine.reduce((a, d) => a + d.lat, 0) / mine.length).toFixed(5)),
+    lon: Number((mine.reduce((a, d) => a + d.lon, 0) / mine.length).toFixed(5)),
+  };
 }
