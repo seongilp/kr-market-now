@@ -41,6 +41,9 @@ from collections import Counter, defaultdict, namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # 상수
 # ---------------------------------------------------------------------------
@@ -223,7 +226,20 @@ class QuarterData:
         self.bad_rows = 0
 
 
-def parse_quarter_full(zip_path: Path, label: str) -> QuarterData:
+def parse_quarter_full(
+    zip_path: Path,
+    label: str,
+    remapper: RegionRemapper | None = None,
+    cur_sigungu_names: dict[str, tuple[str, str]] | None = None,
+) -> QuarterData:
+    """`remapper`/`cur_sigungu_names` 는 이전 분기(202506) 파싱에만 넘긴다.
+
+    202606부터 전남/광주가 "전남광주통합특별시"로 통합되고(시군구 코드 27개 새로
+    부여, 이름은 그대로), 인천 중구/동구/서구·경기 화성시가 각각 여러 구로 쪼개지며
+    시군구명·코드가 바뀌었다. 이전 분기 원본 코드를 그대로 쓰면 이 지역들이
+    "직전 분기엔 있었는데 이번엔 통째로 사라짐 + 이번 분기엔 있는데 직전엔 아예 없었음"
+    으로 잘못 집계된다. 자세한 매핑 로직은 region_remap.py 참고.
+    """
     qd = QuarterData(label)
     for row, idx in _iter_zip_rows(zip_path):
         try:
@@ -236,11 +252,21 @@ def parse_quarter_full(zip_path: Path, label: str) -> QuarterData:
                     lat = round(float(lat_raw), 6)
                 except ValueError:
                     lon = lat = None
+
+            sigungu_code = row[idx["시군구코드"]]
+            sigungu_name = row[idx["시군구명"]]
+            sido_name = row[idx["시도명"]]
+            dong_name = row[idx["행정동명"]]
+            if remapper is not None and remapper.is_affected(sigungu_code):
+                sigungu_code = remapper.resolve_sigungu(sigungu_code, dong_name)
+                if cur_sigungu_names and sigungu_code in cur_sigungu_names:
+                    sido_name, sigungu_name = cur_sigungu_names[sigungu_code]
+
             rec = Record(
-                sigungu_code=iv(row[idx["시군구코드"]]),
-                sigungu_name=iv(row[idx["시군구명"]]),
-                sido_name=iv(row[idx["시도명"]]),
-                dong_name=iv(row[idx["행정동명"]]),
+                sigungu_code=iv(sigungu_code),
+                sigungu_name=iv(sigungu_name),
+                sido_name=iv(sido_name),
+                dong_name=iv(dong_name),
                 mid_code=iv(row[idx["상권업종중분류코드"]]),
                 mid_name=iv(row[idx["상권업종중분류명"]]),
                 small_code=iv(row[idx["상권업종소분류코드"]]),
@@ -700,6 +726,11 @@ def main():
                      help="YEAR=zip경로 (예: 2024=/path/hist_20240630.zip), 여러 번 지정 가능")
     ap.add_argument("--sigungu-json", type=Path, default=Path("data/sigungu.json"))
     ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument(
+        "--region-map", type=Path,
+        default=Path(__file__).resolve().parent / "region-code-map.json",
+        help="이전 분기 시군구 코드를 현재 분기 기준으로 맞추는 매핑 파일",
+    )
     args = ap.parse_args()
 
     out_dir: Path = args.out
@@ -713,9 +744,23 @@ def main():
     cur = parse_quarter_full(args.current_zip, args.current_quarter)
     print(f"  -> {cur.row_count:,} rows, bad={cur.bad_rows}")
 
-    print(f"[build-insights] 이전 분기 파싱: {args.previous_zip} ({args.previous_quarter})")
-    prev = parse_quarter_full(args.previous_zip, args.previous_quarter)
+    region_map = load_region_map(args.region_map)
+    cur_dong_by_sigungu: dict[str, dict[str, str]] = {}
+    cur_sigungu_names: dict[str, tuple[str, str]] = {}
+    for r in cur.records.values():
+        cur_dong_by_sigungu.setdefault(r.sigungu_code, {})[r.dong_name] = r.dong_name
+        cur_sigungu_names.setdefault(r.sigungu_code, (r.sido_name, r.sigungu_name))
+    remapper = RegionRemapper(region_map, cur_dong_by_sigungu)
+
+    print(f"[build-insights] 이전 분기 파싱: {args.previous_zip} ({args.previous_quarter}) "
+          f"(시군구 코드 개편 보정 적용)")
+    prev = parse_quarter_full(
+        args.previous_zip, args.previous_quarter,
+        remapper=remapper, cur_sigungu_names=cur_sigungu_names,
+    )
     print(f"  -> {prev.row_count:,} rows, bad={prev.bad_rows}")
+    if remapper.unresolved_sigungu:
+        print(f"  [경고] 시군구 매칭 실패 {remapper.unresolved_sigungu}건", file=sys.stderr)
 
     cur_ids = set(cur.records.keys())
     prev_ids = set(prev.records.keys())

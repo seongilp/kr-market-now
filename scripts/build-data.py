@@ -37,6 +37,9 @@ from collections import Counter, defaultdict, namedtuple
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
+
 # ---------------------------------------------------------------------------
 # CSV 스펙 (39 컬럼, 확인됨)
 # ---------------------------------------------------------------------------
@@ -109,7 +112,15 @@ class QuarterStats:
         self.sigungu_mid_counter: Counter = Counter()  # (sigungu_code, mid_code) -> count
 
 
-def parse_quarter(zip_path: Path, label: str) -> QuarterStats:
+def parse_quarter(
+    zip_path: Path,
+    label: str,
+    remapper: RegionRemapper | None = None,
+    cur_sigungu_names: dict[str, tuple[str, str]] | None = None,
+) -> QuarterStats:
+    """`remapper`/`cur_sigungu_names` 는 이전 분기를 파싱할 때만 넘긴다 —
+    202506 스냅샷의 (전남/광주 옛 코드, 인천 중구/동구/서구, 경기 화성시) 를
+    202606 기준 코드/이름으로 맞추기 위함(자세한 배경은 region_remap.py 참고)."""
     qs = QuarterStats(label)
     with zipfile.ZipFile(zip_path) as z:
         csv_members = sorted(
@@ -160,6 +171,14 @@ def parse_quarter(zip_path: Path, label: str) -> QuarterStats:
                             KR_LON_RANGE[0] <= lon <= KR_LON_RANGE[1]
                         ):
                             qs.out_of_range_coord += 1
+
+                    if remapper is not None and remapper.is_affected(sigungu_code):
+                        new_sigungu_code = remapper.resolve_sigungu(sigungu_code, dong_name)
+                        dong_code = iv(remapper.resolve_dong_code(new_sigungu_code, dong_name, dong_code))
+                        sigungu_code = iv(new_sigungu_code)
+                        if cur_sigungu_names and sigungu_code in cur_sigungu_names:
+                            sido_name, sigungu_name = cur_sigungu_names[sigungu_code]
+                            sido_name, sigungu_name = iv(sido_name), iv(sigungu_name)
 
                     qs.records[store_id] = Record(
                         sigungu_code, sigungu_name, sido_name,
@@ -471,6 +490,11 @@ def main():
     ap.add_argument("--previous-quarter", required=True)
     ap.add_argument("--out", required=True, type=Path)
     ap.add_argument("--source-note", default="")
+    ap.add_argument(
+        "--region-map", type=Path,
+        default=Path(__file__).resolve().parent / "region-code-map.json",
+        help="이전 분기 시군구/행정동 코드를 현재 분기 기준으로 맞추는 매핑 파일",
+    )
     args = ap.parse_args()
 
     out_dir: Path = args.out
@@ -480,8 +504,22 @@ def main():
     cur = parse_quarter(args.current_zip, args.current_quarter)
     print(f"  -> {cur.row_count:,} rows, malformed={cur.bad_field_count_rows}")
 
-    print(f"[build-data] 이전 분기 파싱: {args.previous_zip} ({args.previous_quarter})")
-    prev = parse_quarter(args.previous_zip, args.previous_quarter)
+    region_map = load_region_map(args.region_map)
+    cur_dong_by_sigungu = build_cur_dong_index(cur.dong_meta)
+    remapper = RegionRemapper(region_map, cur_dong_by_sigungu)
+
+    print(f"[build-data] 이전 분기 파싱: {args.previous_zip} ({args.previous_quarter}) "
+          f"(시군구/행정동 코드 개편 보정 적용)")
+    prev = parse_quarter(
+        args.previous_zip, args.previous_quarter,
+        remapper=remapper, cur_sigungu_names=cur.sigungu_meta,
+    )
+    if remapper.unresolved_sigungu or remapper.unresolved_dong:
+        print(
+            f"  [경고] 코드 개편 보정: 시군구 매칭 실패 {remapper.unresolved_sigungu}건, "
+            f"행정동 매칭 실패(시군구는 맞음) {remapper.unresolved_dong}건",
+            file=sys.stderr,
+        )
     print(f"  -> {prev.row_count:,} rows, malformed={prev.bad_field_count_rows}")
 
     print("[build-data] 정합성 체크 계산 중...")
