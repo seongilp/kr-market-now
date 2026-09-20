@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { ChangeMap } from '@/components/change-map';
 import { Stat } from '@/components/stat';
 import { changes, dongList, getSigungu, meta, pct, quarterLabel, sigunguList, signed } from '@/lib/data';
 import type { ChangeItem, DongSummary } from '@/lib/data-types';
@@ -49,6 +50,14 @@ export default async function RegionPage({ params }: PageProps<'/r/[code]'>) {
         <Stat label="새로 생긴 곳" value={region.opened.toLocaleString()} tone="up" />
         <Stat label="사라진 곳" value={region.closed.toLocaleString()} tone="down" />
         <Stat label="교체율" value={pct(region.turnoverRate)} sub={`전국 평균 ${pct(nationalRate)}`} />
+      </section>
+
+      <section>
+        <h2 className="mb-1 text-lg font-semibold">지도에서 보기</h2>
+        <p className="mb-3 text-sm text-muted-foreground">
+          파란 점이 새로 생긴 곳, 빨간 점이 사라진 곳입니다. 점을 누르면 상호와 업종이 나옵니다.
+        </p>
+        <ChangeMap code={region.code} regionName={region.name} />
       </section>
 
       <section>

@@ -201,3 +201,23 @@ export interface UpjongRankRow {
    * 한 생략될 수 있으므로 선택 필드로 둔다. */
   per10k?: number;
 }
+
+/** data/dots.json 의 원소 하나 — 전국 지도에서 행정동 하나를 나타내는 원.
+ * 좌표는 행정동 경계가 아니라 그 동네 변화 점들의 무게중심(대표값)이다. */
+export interface Dot {
+  /** 행정동코드 */
+  code: string;
+  /** 행정동명 */
+  name: string;
+  sigunguCode: string;
+  sigungu: string;
+  sido: string;
+  lon: number;
+  lat: number;
+  /** 파생값: 신규 추정 수 */
+  opened: number;
+  /** 파생값: 소멸 추정 수 */
+  closed: number;
+  /** 최신 분기 상가 수 */
+  stores: number;
+}

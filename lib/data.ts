@@ -14,9 +14,11 @@ export const sigunguList = sigunguJson as SigunguSummary[];
 export const upjong = upjongJson as UpjongTable;
 
 const DATA_DIR = path.join(process.cwd(), 'data');
+// 변화 목록은 지도(클라이언트)도 같은 파일을 URL 로 받아 쓰기 때문에 public 아래에 둔다
+const PUBLIC_DATA_DIR = path.join(process.cwd(), 'public', 'data');
 
-async function readJson<T>(...segments: string[]): Promise<T> {
-  return JSON.parse(await readFile(path.join(DATA_DIR, ...segments), 'utf8')) as T;
+async function readJson<T>(dir: string, ...segments: string[]): Promise<T> {
+  return JSON.parse(await readFile(path.join(dir, ...segments), 'utf8')) as T;
 }
 
 export function getSigungu(code: string): SigunguSummary | undefined {
@@ -24,15 +26,15 @@ export function getSigungu(code: string): SigunguSummary | undefined {
 }
 
 export function dongList(code: string): Promise<DongSummary[]> {
-  return readJson<DongSummary[]>('dong', `${code}.json`);
+  return readJson<DongSummary[]>(DATA_DIR, 'dong', `${code}.json`);
 }
 
 export function changes(code: string): Promise<SigunguChanges> {
-  return readJson<SigunguChanges>('changes', `${code}.json`);
+  return readJson<SigunguChanges>(PUBLIC_DATA_DIR, 'changes', `${code}.json`);
 }
 
 export function upjongRank(code: string): Promise<UpjongRank> {
-  return readJson<UpjongRank>('rank', `upjong-${code}.json`);
+  return readJson<UpjongRank>(DATA_DIR, 'rank', `upjong-${code}.json`);
 }
 
 /** 분기 코드(202606) → "2026년 6월" */

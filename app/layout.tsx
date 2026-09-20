@@ -35,6 +35,11 @@ export default function RootLayout({ children }: LayoutProps<'/'>) {
               </span>
               {NAME}
             </Link>
+            <nav className="ml-auto text-sm">
+              <Link href="/map" className="text-muted-foreground hover:text-foreground">
+                전국 지도
+              </Link>
+            </nav>
           </div>
         </header>
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">{children}</main>

@@ -28,6 +28,12 @@ export default function Home() {
           비교했습니다. 우리 동네에서 무엇이 생기고 무엇이 문을 닫았는지 찾아보세요.
         </p>
         <RegionSearch regions={sigunguList} />
+        <Link
+          href="/map"
+          className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+        >
+          전국 지도에서 보기 <ArrowUpRight className="size-4" aria-hidden />
+        </Link>
       </section>
 
       <section className="grid gap-3 sm:grid-cols-4">
