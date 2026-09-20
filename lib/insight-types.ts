@@ -23,10 +23,8 @@ export interface UpjongStat {
   openRate: number;
 }
 
-export interface MiddleUpjongStat extends UpjongStat {
-  largeCode: string;
-  largeName: string;
-}
+/** 중분류. 대분류는 `data/upjong.json` 의 표에서 찾는다(`largeNameOf`) */
+export type MiddleUpjongStat = UpjongStat;
 
 export interface SmallUpjongStat extends UpjongStat {
   middleCode: string;
@@ -78,7 +76,8 @@ export interface NationalInsights {
   /** 주소 매칭에 성공한 소멸→신규 쌍의 수(신뢰도 표시용) */
   transitionMatched: number;
   brands: BrandStat[];
-  /** 연도별(6월 기준) 업종 점포 수 추이. years 와 같은 길이의 배열 */
+  /** 연도별(6월 기준) 업종 점포 수 추이. years 와 같은 길이의 배열.
+   * 키는 업종 코드가 아니라 **업종명**이다(연도 사이 코드 재부여에 안전하도록). `yearlySeries()` 로 찾을 것 */
   yearly: {
     years: number[];
     middle: Record<string, number[]>;
