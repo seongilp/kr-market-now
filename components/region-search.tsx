@@ -22,15 +22,18 @@ export function RegionSearch({ regions }: { regions: SigunguSummary[] }) {
   }, [deferred, regions]);
 
   return (
-    <div className="relative">
-      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="동네 찾기 — 예: 강남구, 수지구, 전주"
-        className="h-12 rounded-xl border-[#E5E8EB] bg-white pl-9 text-base shadow-sm focus-visible:border-primary"
-        aria-label="시군구 검색"
-      />
+    <div>
+      {/* 아이콘은 입력창만 감싼 래퍼 기준으로 세로 중앙에 둔다 — 결과 목록까지 감싸면 아래로 밀린다 */}
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="동네 찾기 — 예: 강남구, 수지구, 전주"
+          className="h-12 rounded-xl border-[#E5E8EB] bg-white pl-9 text-base shadow-sm focus-visible:border-primary"
+          aria-label="시군구 검색"
+        />
+      </div>
       {deferred.trim() && (
         <ul className="mt-2 divide-y rounded-xl border bg-white">
           {hits.length === 0 && <li className="p-3 text-sm text-muted-foreground">그런 지역이 없어요.</li>}
