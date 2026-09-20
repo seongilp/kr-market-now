@@ -1,0 +1,73 @@
+{
+  "current": "202606",
+  "previous": "202506",
+  "generatedAt": "2026-09-20T13:02:24.271936+00:00",
+  "totals": {
+    "stores": 2772484,
+    "prevStores": 2697338,
+    "opened": 441767,
+    "closed": 366621
+  },
+  "sourceNote": "소진공 상가(상권)정보 202606(2026-06-30 기준) vs 202506(2025-06-30 기준) 비교. opened/closed 는 상가업소번호 diff 기반 추정값.",
+  "sanityChecks": {
+    "id_intersection": {
+      "common": 2330717,
+      "prev_total": 2697338,
+      "cur_total": 2772484,
+      "ratio_vs_prev": 0.8641,
+      "ratio_vs_cur": 0.8407
+    },
+    "dong_code_scheme": {
+      "cur_dong_codes": 3558,
+      "prev_dong_codes": 3555,
+      "common": 3076,
+      "only_in_cur": 482,
+      "only_in_prev": 479,
+      "sample_only_in_cur": [
+        "11230515",
+        "11230533",
+        "12110510",
+        "12110520",
+        "12110535",
+        "12110545",
+        "12110554",
+        "12110558",
+        "12110565",
+        "12110595"
+      ],
+      "sample_only_in_prev": [
+        "11230536",
+        "28110520",
+        "28110530",
+        "28110540",
+        "28110560",
+        "28110570",
+        "28110585",
+        "28110615",
+        "28110620",
+        "28110622"
+      ]
+    },
+    "coords": {
+      "cur": {
+        "rows": 2772484,
+        "missing": 0,
+        "missing_pct": 0.0,
+        "out_of_range": 0,
+        "out_of_range_pct": 0.0
+      },
+      "prev": {
+        "rows": 2697338,
+        "missing": 0,
+        "missing_pct": 0.0,
+        "out_of_range": 0,
+        "out_of_range_pct": 0.0
+      }
+    },
+    "encoding": "utf-8 (모든 행 utf-8 strict 디코딩 성공, 깨진 행 없음)",
+    "malformed_rows": {
+      "cur": 0,
+      "prev": 0
+    }
+  }
+}
