@@ -432,7 +432,7 @@ def main():
     print(f"  q 분포(1={closed_q_quarters[0]} .. 4={closed_q_quarters[-1]}): {closed_q_hist}")
     print(f"renamed(k=2, 신규 쪽만 기록): written={renamed_written:,} dropped(좌표 결측/이상치)={renamed_dropped:,}")
     print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}): {renamed_q_hist}")
-    print(f"총 피처 수: {opened_written + closed_written:,}")
+    print(f"총 피처 수: {opened_written + closed_written + renamed_written:,}")
     print(f"NDJSON: {args.ndjson}")
 
 
