@@ -1,49 +1,63 @@
 #!/usr/bin/env python3
-"""소진공 상가(상권)정보 식품접객업 계열 점포 <-> 식약처 인허가(I1200) 조인.
+"""소진공 상가(상권)정보 식품접객업 계열 점포 <-> 지방행정인허가데이터 조인.
 
 배경: 소진공 상가정보는 원본에 폐업 정보가 없어 opened/closed 를 분기
 스냅샷 비교로 "추정"한다(scripts/build-data.py, scripts/match.py). 그런데
-식약처/지방행정 인허가데이터는 인허가일자·폐업일자가 명시돼 있어 실제
-개폐업 시점을 알 수 있다 — 소진공 등록이 늦게 반영되는 경우(예: 스타벅스
-철산역점, 식약처 허가일 2019-10-22 인데 소진공 202603 회차까지 등장 안 함)
-"신규"로 오판될 수 있고, 반대로 실제로는 폐업했는데 소진공에 아직 남아있어
-"소멸" 판정이 늦어질 수도 있다. 이 스크립트는 그 격차를 정량화한다.
+지방행정 인허가데이터는 인허가일자·폐업일자가 명시돼 있어 실제 개폐업
+시점을 알 수 있다 — 소진공 등록이 늦게 반영되는 경우(예: 스타벅스 철산역점,
+인허가일 2019-10-22 인데 소진공 202603 회차까지 등장 안 함) "신규"로
+오판될 수 있고, 반대로 실제로는 폐업했는데 소진공에 아직 남아있어 "소멸"
+판정이 늦어질 수도 있다. 이 스크립트는 그 격차를 정량화한다.
 
-데이터 소스 조사 결과(2026-09-21, 이 스크립트 작성 시점):
-  - localdata.go.kr(지방행정인허가데이터 "전체 데이터 다운로드")는 이 실행
-    환경에서 curl/헤드리스 브라우저 모두 TLS 핸드셰이크 전에 연결 타임아웃
-    — DNS는 풀리지만(152.99.104.122) 접속이 막혀 있어 접근 불가로 판단.
-  - data.go.kr 의 "식품접객업" 파일데이터는 전국 단일 파일이 아니라
-    시군구별로 쪼개져 올라와 있다(예: "인천광역시_연수구_식품접객업 현황",
-    "부산광역시_금정구_식품접객업 현황" ...) — 전국을 받으려면 수백 건을
-    개별 신청/다운로드해야 해서 API 경로보다 느리다.
-  - 그래서 식품안전나라 오픈API I1200(식품접객업정보)을 썼다. 이미 이전
-    세션에서 활용신청이 승인돼 있었다(scripts/../scratchpad 흔적 참고).
-    1회 최대 1,000건, 하루 호출 한도가 있어 scripts/../scratchpad 아래
-    fetch_i1200.py 가 진행 상태를 저장하며 여러 날에 걸쳐 이어받는다
-    (이 조인 스크립트와는 별도 실행 — README 대신 이 주석 및 최종 보고 참고).
-  - **좌표계**: I1200 의 SITE_X/SITE_Y 는 이름과 달리 TM(중부원점)이 아니라
-    이미 WGS84 경도/위도였다(실측: 장수식당 SITE_X=126.6468694,
-    SITE_Y=37.4652466 — 인천 미추홀구 범위와 일치). pyproj 변환 불필요.
-  - **주소 한계**: I1200 오픈API 의 LOCP_ADDR 은 시군구 수준까지만 내려온다
-    (예: "경기도 광명시" — 도로명·층·호 없음, 개인정보 마스킹으로 추정).
-    그래서 과제에서 제시한 매칭 키 ①(정규화 상호명+도로명주소)과
-    ③(도로명주소+층/호 단독)은 이 데이터로는 애초에 불가능하다. 실질적으로
-    가능한 건 ②(정규화 상호명 + 좌표 근접)뿐이다 — 이 스크립트는 ②만
-    구현한다(이 사실 자체가 조사 결과이자 한계).
+데이터 소스 조사 결과(2026-09-21):
+  - localdata.go.kr(www 도메인)은 이 실행 환경에서 curl/헤드리스 브라우저
+    모두 TLS 핸드셰이크 전에 연결 타임아웃 — 접근 불가.
+  - **찾은 우회로**: data.go.kr 의 "행정안전부_식품_XXX" 파일데이터 상세
+    페이지("제공형태: 기관자체에서 다운로드") 가 실제로는
+    `https://file.localdata.go.kr/file/<slug>/info` 를 가리키는데, 이
+    서브도메인은 (www.localdata.go.kr 과 달리) 이 환경에서 접속된다
+    (Referer 헤더 필요 — 없으면 /error.html 로 302). 그 페이지의
+    "전체 다운로드" 버튼이 부르는 `GET /file/download-all` 이 슬러그와
+    무관하게 **지방행정인허가데이터 전체(모든 업종, 1,086개 CSV)를
+    담은 단일 zip("인허가정보.zip", 약 925MB)** 을 반환한다 — 로그인
+    불필요, curl 만으로 수 초~수십 초 안에 전량 확보(scripts/../scratchpad
+    localdata/dl_localdata_all.sh 참고). 식약처 I1200 오픈API(하루
+    2,000회 제한, 좌표는 있지만 주소가 시군구수준까지만 나옴)보다 압도적으로
+    빠르고 데이터도 더 좋아 이 경로로 전환했다 — fetch_i1200*.py 는 중단,
+    받아둔 부분 데이터만 교차검증용으로 남겼다.
+  - **좌표계**: CSV의 "좌표정보(X)"/"좌표정보(Y)" 는 TM(EPSG:5174, 중부원점
+    Bessel1841)이다. 실측 검증: 스타벅스철산역점 좌표
+    (188226.3396, 441595.6398) 를 EPSG:5174 -> EPSG:4326 로 pyproj 변환하면
+    (126.867684, 37.476469) — 과제에서 준 참값(126.8677, 37.4765)과
+    10m 이내 일치. EPSG:5181/2097/5186 등 다른 후보는 이보다 어긋난다.
+  - **주소**: "도로명주소" 컬럼에 건물명/층/호 정보가 콤마로 이어 붙어있다
+    (예: "경기도 광명시 철산로 15, 웅진빌딩 1층 일부호 (철산동)"). 첫
+    콤마 앞부분("경기도 광명시 철산로 15")이 소진공 "도로명주소" 컬럼
+    형식과 정확히 같아 road_prefix 로 쓸 수 있다(실측 확인됨).
+  - 인허가일자 2019-10-22 — 과제에서 준 값과 정확히 일치(스타벅스철산역점,
+    식품_휴게음식점.csv).
+
+매칭 3단계(과제 지시 순서, 각 단계는 이전 단계에서 못 찾은 것만 시도):
+  ① 정규화 상호명 + road_prefix 정확히 일치
+  ② 정규화 상호명 + 좌표 반경 --radius-m(기본 50m) 이내 최근접
+  ③ road_prefix 만 일치(상호명 무시) + 그 road_prefix 안에서 소진공쪽
+     미매칭 1개 : 인허가쪽 미매칭 1개로 1:1인 경우만(모호하면 skip) —
+     "층·호 단독" 매칭의 근사치(자유서식 층/호 텍스트를 안정적으로 파싱하기
+     어려워 도로명주소 전체를 키로 씀 — 과제가 요청한 것보다 다소 느슨한
+     근사이며 그렇게 표시한다, 추측).
 
 사용법:
     python3 scripts/build-license.py \
         --current-zip <202606 zip> --current-quarter 202606 \
         --previous-zip <202506 zip> --previous-quarter 202506 \
-        --i1200-ndjson <scratchpad>/localdata/i1200_raw.ndjson \
+        --localdata-zip <scratchpad>/localdata/인허가정보_전체.zip \
         --out-dir <scratchpad>/license-join \
-        [--radius-m 50] [--sample-json <path>]
+        [--radius-m 50] [--i1200-ndjson <scratchpad>/localdata/i1200_raw.ndjson]
 
 출력(모두 scratchpad, 리포에는 커밋 안 함):
   - <out-dir>/store_license_map.ndjson : 상가업소번호 -> {허가일, 폐업일,
-    영업상태, 인허가관리번호(BSN_LCNS_LEDG_NO), 매칭방식, 거리m}
-  - <out-dir>/report.json : 정량화 결과(질문 3의 표)
+    영업상태, 인허가관리번호, 매칭방식, 거리m(있으면)}
+  - <out-dir>/report.json : 정량화 결과
 """
 from __future__ import annotations
 
@@ -62,6 +76,11 @@ from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  
 from match import find_renamed_pairs, resolve_opened_closed  # noqa: E402
 from normalize import normalize_brand, brand_is_noise  # noqa: E402
 
+try:
+    from pyproj import Transformer
+except ImportError:  # pragma: no cover
+    Transformer = None
+
 COLUMNS = [
     "상가업소번호", "상호명", "지점명", "상권업종대분류코드", "상권업종대분류명",
     "상권업종중분류코드", "상권업종중분류명", "상권업종소분류코드", "상권업종소분류명",
@@ -72,6 +91,26 @@ COLUMNS = [
     "신우편번호", "동정보", "층정보", "호정보", "경도", "위도",
 ]
 IDX = {name: i for i, name in enumerate(COLUMNS)}
+
+# 인허가정보.zip 안에서 "식품접객업 계열"로 볼 CSV 목록(식품 폴더 하위).
+# 즉석판매제조가공업/집단급식소식품판매업은 손님이 매장에서 먹는 "접객업"이라기보다
+# 제조/판매업에 가깝지만, 카페·베이커리 일부가 이 코드로 등록되는 경우가 있어
+# 매칭 후보 풀에는 포함하고(놓치는 것보다 낫다는 판단), 정량화 보고에서는 이
+# 사실을 명시한다.
+FOOD_CSV_MEMBERS = [
+    "식품/식품_일반음식점.csv",
+    "식품/식품_휴게음식점.csv",
+    "식품/식품_제과점영업.csv",
+    "식품/식품_단란주점영업.csv",
+    "식품/식품_유흥주점영업.csv",
+    "식품/식품_집단급식소.csv",
+    "식품/식품_위탁급식영업.csv",
+    "식품/식품_관광식당.csv",
+    "식품/식품_즉석판매제조가공업.csv",
+    "식품/식품_집단급식소식품판매업.csv",
+]
+
+TM_EPSG = "EPSG:5174"  # 중부원점(Bessel1841) — 스타벅스철산역점 좌표로 검증됨
 
 
 class Store:
@@ -91,7 +130,7 @@ class Store:
         self.sigungu_code = sigungu_code
         self.sigungu_name = sigungu_name
         self.sido_name = sido_name
-        self.road = row[IDX["도로명주소"]]
+        self.road = row[IDX["도로명주소"]].strip()
         self.floor = row[IDX["층정보"]]
         self.ho = row[IDX["호정보"]]
         lon_raw, lat_raw = row[IDX["경도"]], row[IDX["위도"]]
@@ -149,58 +188,157 @@ def haversine_m(lon1, lat1, lon2, lat2):
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def load_i1200(ndjson_path: Path):
-    """I1200 레코드를 (정규화 상호명) -> [행] 인덱스로 적재.
+LOCALDATA_COLS = [
+    "개방자치단체코드", "관리번호", "인허가일자", "영업상태명", "폐업일자",
+    "소재지면적", "소재지우편번호", "도로명우편번호", "사업장명", "업태구분명",
+    "데이터갱신구분", "건물소유구분명", "공장사무직직원수", "공장생산직직원수",
+    "공장판매직직원수", "급수시설구분명", "남성종사자수", "다중이용업소여부",
+    "데이터갱신시점", "도로명주소", "등급구분명", "보증액", "본사직원수",
+    "상세영업상태명", "상세영업상태코드", "시설총규모", "여성종사자수",
+    "영업상태코드", "영업장주변구분명", "월세액", "위생업태명", "전통업소주된음식",
+    "전통업소지정번호", "전화번호", "좌표정보(X)", "좌표정보(Y)", "지번주소",
+    "홈페이지", "최종수정시점",
+]
+LIDX = {n: i for i, n in enumerate(LOCALDATA_COLS)}
 
-    각 행: dict(lcns_no, bssh_nm, norm, lon, lat, prms_dt, clsbiz_dt, INDUTY_NM)
-    좌표가 없거나(빈 문자열) 대한민국 bbox 밖이면 매칭 후보에서 제외.
+
+def road_prefix(road_addr: str) -> str:
+    """"경기도 광명시 철산로 15, 웅진빌딩 1층 일부호 (철산동)" -> "경기도 광명시 철산로 15"."""
+    if not road_addr:
+        return ""
+    return road_addr.split(",", 1)[0].strip()
+
+
+def load_localdata_food(zip_path: Path, members: list[str] = FOOD_CSV_MEMBERS):
+    """지방행정인허가데이터(localdata.go.kr) 식품접객업 계열 CSV 들을 적재.
+
+    반환: (records: list[dict], per_file_stats: dict[str, dict])
+    각 record: mgmt_no, name, road, road_pref, license_date(YYYYMMDD int or
+    None), close_date(YYYYMMDD int or None), status_name, status_detail,
+    lon, lat(WGS84, 변환 실패/범위밖이면 None), category(파일명에서 추출),
+    last_update(YYYYMMDD int or None)
     """
+    if Transformer is None:
+        raise SystemExit("[build-license] pyproj 가 필요합니다: pip install pyproj")
+    transformer = Transformer.from_crs(TM_EPSG, "EPSG:4326", always_xy=True)
+
+    records: list[dict] = []
+    per_file_stats: dict[str, dict] = {}
+
+    with zipfile.ZipFile(zip_path) as z:
+        available = set(z.namelist())
+        for member in members:
+            if member not in available:
+                print(f"[build-license][경고] {member} zip 안에 없음 — 건너뜀", file=sys.stderr)
+                continue
+            category = member.rsplit("/", 1)[-1].replace("식품_", "").replace(".csv", "")
+            rows = 0
+            coord_ok = 0
+            coord_fail = 0
+            max_update = None
+            with z.open(member) as raw:
+                tf = io.TextIOWrapper(raw, encoding="cp949", errors="replace", newline="")
+                reader = csv.reader(tf)
+                header = next(reader)
+                if len(header) != len(LOCALDATA_COLS):
+                    print(f"[build-license][경고] {member} 헤더 컬럼 수 {len(header)} != {len(LOCALDATA_COLS)}",
+                          file=sys.stderr)
+                for row in reader:
+                    if len(row) != len(LOCALDATA_COLS):
+                        continue
+                    rows += 1
+                    name = row[LIDX["사업장명"]].strip()
+                    if not name:
+                        continue
+                    road = row[LIDX["도로명주소"]].strip()
+                    x_raw = row[LIDX["좌표정보(X)"]].strip()
+                    y_raw = row[LIDX["좌표정보(Y)"]].strip()
+                    lon = lat = None
+                    if x_raw and y_raw:
+                        try:
+                            x, y = float(x_raw), float(y_raw)
+                            lon, lat = transformer.transform(x, y)
+                            if not (124.0 <= lon <= 132.5 and 32.5 <= lat <= 39.5):
+                                lon = lat = None
+                        except (ValueError, TypeError):
+                            lon = lat = None
+                    if lon is not None:
+                        coord_ok += 1
+                    else:
+                        coord_fail += 1
+
+                    lic = row[LIDX["인허가일자"]].replace("-", "")
+                    lic_i = int(lic) if lic.isdigit() and len(lic) == 8 else None
+                    cls = row[LIDX["폐업일자"]].replace("-", "")
+                    cls_i = int(cls) if cls.isdigit() and len(cls) == 8 else None
+                    upd = row[LIDX["최종수정시점"]][:10].replace("-", "")
+                    upd_i = int(upd) if upd.isdigit() and len(upd) == 8 else None
+                    if upd_i and (max_update is None or upd_i > max_update):
+                        max_update = upd_i
+
+                    records.append({
+                        "mgmt_no": row[LIDX["관리번호"]],
+                        "name": name,
+                        "norm": normalize_brand(name),
+                        "road": road,
+                        "road_pref": road_prefix(road),
+                        "license_date": lic_i,
+                        "close_date": cls_i,
+                        "status_name": row[LIDX["영업상태명"]],
+                        "status_detail": row[LIDX["상세영업상태명"]],
+                        "lon": lon, "lat": lat,
+                        "category": category,
+                        "last_update": upd_i,
+                    })
+            per_file_stats[category] = {
+                "rows": rows, "coord_ok": coord_ok, "coord_fail": coord_fail,
+                "max_last_update": max_update,
+            }
+    return records, per_file_stats
+
+
+def build_indices(records: list[dict]):
+    by_name_road: dict[tuple[str, str], list[dict]] = defaultdict(list)
     by_name: dict[str, list[dict]] = defaultdict(list)
-    total = 0
-    no_coord = 0
-    with open(ndjson_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            r = json.loads(line)
-            total += 1
-            sx, sy = r.get("SITE_X", ""), r.get("SITE_Y", "")
-            try:
-                lon, lat = float(sx), float(sy)
-            except (ValueError, TypeError):
-                no_coord += 1
-                continue
-            if not (124.0 <= lon <= 132.5 and 32.5 <= lat <= 39.5):
-                no_coord += 1
-                continue
-            norm = normalize_brand(r.get("BSSH_NM", ""))
-            if brand_is_noise(norm):
-                continue
-            by_name[norm].append({
-                "lcns_no": r.get("BSN_LCNS_LEDG_NO") or r.get("LCNS_NO"),
-                "name": r.get("BSSH_NM"),
-                "lon": lon, "lat": lat,
-                "prms_dt": r.get("PRMS_DT") or None,
-                "clsbiz_dt": r.get("CLSBIZ_DT") or None,
-                "induty": r.get("INDUTY_NM"),
-                "locp_addr": r.get("LOCP_ADDR"),
-            })
-    return by_name, total, no_coord
+    by_road: dict[str, list[dict]] = defaultdict(list)
+    for r in records:
+        if brand_is_noise(r["norm"]):
+            continue
+        if r["road_pref"]:
+            by_name_road[(r["norm"], r["road_pref"])].append(r)
+            by_road[r["road_pref"]].append(r)
+        by_name[r["norm"]].append(r)
+    return by_name_road, by_name, by_road
 
 
-def match_store(store: Store, i1200_by_name: dict, radius_m: float):
+def match_tier1(store: Store, by_name_road):
+    if not store.road:
+        return None
+    norm = normalize_brand(store.name)
+    if brand_is_noise(norm):
+        return None
+    cands = by_name_road.get((norm, store.road))
+    if not cands:
+        return None
+    # 여러 개면(같은 상호+주소가 여러 인허가 행 — 드묾) 가장 최근 허가일자를 고른다.
+    best = max(cands, key=lambda r: r["license_date"] or 0)
+    return best
+
+
+def match_tier2(store: Store, by_name, radius_m: float):
     if store.lon is None or store.lat is None:
         return None
     norm = normalize_brand(store.name)
     if brand_is_noise(norm):
         return None
-    candidates = i1200_by_name.get(norm)
-    if not candidates:
+    cands = by_name.get(norm)
+    if not cands:
         return None
     best = None
     best_d = None
-    for c in candidates:
+    for c in cands:
+        if c["lon"] is None:
+            continue
         d = haversine_m(store.lon, store.lat, c["lon"], c["lat"])
         if d <= radius_m and (best_d is None or d < best_d):
             best_d = d
@@ -210,24 +348,39 @@ def match_store(store: Store, i1200_by_name: dict, radius_m: float):
     return best, best_d
 
 
-def parse_ymd(s: str | None):
-    if not s or len(s) != 8:
-        return None
-    try:
-        return int(s)  # YYYYMMDD as int, sortable
-    except ValueError:
-        return None
+def match_tier3(store_ids_unmatched, snapshot, by_road, used_mgmt_nos: set[str]):
+    """road_prefix 단독 매칭(상호명 무시) — 그 주소에 소진공쪽 미매칭 1개,
+    인허가쪽(아직 tier1/2 에서 안 쓰인) 후보가 정확히 1개일 때만 1:1로 묶는다."""
+    by_road_store: dict[str, list[str]] = defaultdict(list)
+    for sid in store_ids_unmatched:
+        road = snapshot[sid].road
+        if road:
+            by_road_store[road].append(sid)
+
+    results: dict[str, dict] = {}
+    for road, sids in by_road_store.items():
+        if len(sids) != 1:
+            continue  # 모호(같은 주소에 미매칭 소진공 점포 2개 이상) — 건너뜀
+        cands = [c for c in by_road.get(road, []) if c["mgmt_no"] not in used_mgmt_nos]
+        if len(cands) != 1:
+            continue  # 후보 0개 또는 2개 이상 — 건너뜀(과매칭 방지)
+        results[sids[0]] = cands[0]
+    return results
 
 
-def bucket_year(prms_dt_int: int | None) -> str:
-    if prms_dt_int is None:
+def parse_ymd(v):
+    return v  # 이미 int(YYYYMMDD) or None
+
+
+def bucket_year(lic: int | None) -> str:
+    if lic is None:
         return "unknown"
-    y = prms_dt_int // 10000
+    y = lic // 10000
     if y < 2020:
         return "2019이전"
     if 2020 <= y <= 2024:
         return "2020~2024"
-    if prms_dt_int < 20250701:
+    if lic < 20250701:
         return "2025H1"
     return "2025H2~2026"
 
@@ -238,7 +391,7 @@ def main():
     ap.add_argument("--current-quarter", required=True)
     ap.add_argument("--previous-zip", required=True, type=Path)
     ap.add_argument("--previous-quarter", required=True)
-    ap.add_argument("--i1200-ndjson", required=True, type=Path)
+    ap.add_argument("--localdata-zip", required=True, type=Path)
     ap.add_argument("--out-dir", required=True, type=Path)
     ap.add_argument("--radius-m", type=float, default=50.0)
     ap.add_argument(
@@ -295,153 +448,162 @@ def main():
     closed_food_ids = [sid for sid in final_closed_ids if prev[sid].large_code == food_code]
     print(f"  -> 식품접객업({food_code}) 신규={len(opened_food_ids):,} 소멸={len(closed_food_ids):,}")
 
-    print(f"[build-license] I1200 적재: {args.i1200_ndjson}")
-    i1200_by_name, i1200_total, i1200_no_coord = load_i1200(args.i1200_ndjson)
-    print(f"  -> I1200 rows={i1200_total:,} (좌표 없음/범위밖 제외={i1200_no_coord:,}, "
-          f"이름 정규화 후 고유 키={len(i1200_by_name):,})")
+    print(f"[build-license] 인허가데이터 적재: {args.localdata_zip}")
+    ld_records, per_file_stats = load_localdata_food(args.localdata_zip)
+    print(f"  -> 인허가 레코드 {len(ld_records):,}건 (파일별 통계는 report.json 참고)")
+    for cat, st in per_file_stats.items():
+        print(f"     {cat}: rows={st['rows']:,} coord_ok={st['coord_ok']:,} "
+              f"coord_fail={st['coord_fail']:,} max_last_update={st['max_last_update']}")
 
-    print(f"[build-license] 좌표 매칭 (반경 {args.radius_m}m)...")
+    by_name_road, by_name, by_road = build_indices(ld_records)
 
-    def match_set(ids, snapshot):
-        matched = []
-        unmatched = 0
+    def match_all(ids, snapshot):
+        matched: dict[str, tuple[dict, str, float | None]] = {}
+        used_mgmt = set()
+        unmatched = []
         for sid in ids:
             st = snapshot[sid]
-            res = match_store(st, i1200_by_name, args.radius_m)
-            if res is None:
-                unmatched += 1
+            r = match_tier1(st, by_name_road)
+            if r is not None:
+                matched[sid] = (r, "tier1_name+road", 0.0)
+                used_mgmt.add(r["mgmt_no"])
                 continue
-            c, d = res
-            matched.append((sid, st, c, d))
+            res2 = match_tier2(st, by_name, args.radius_m)
+            if res2 is not None:
+                r, d = res2
+                matched[sid] = (r, "tier2_name+coord", d)
+                used_mgmt.add(r["mgmt_no"])
+                continue
+            unmatched.append(sid)
+
+        tier3 = match_tier3(unmatched, snapshot, by_road, used_mgmt)
+        for sid, r in tier3.items():
+            matched[sid] = (r, "tier3_road_only", None)
+            used_mgmt.add(r["mgmt_no"])
+            unmatched.remove(sid)
+
         return matched, unmatched
 
-    opened_matched, opened_unmatched = match_set(opened_food_ids, cur)
-    closed_matched, closed_unmatched = match_set(closed_food_ids, prev)
+    print(f"[build-license] 3단계 매칭 (반경 {args.radius_m}m)...")
+    opened_matched, opened_unmatched = match_all(opened_food_ids, cur)
+    closed_matched, closed_unmatched = match_all(closed_food_ids, prev)
+
+    tier_counts_opened = Counter(v[1] for v in opened_matched.values())
+    tier_counts_closed = Counter(v[1] for v in closed_matched.values())
     print(f"  -> 신규 매칭 {len(opened_matched):,}/{len(opened_food_ids):,} "
-          f"({len(opened_matched)/max(1,len(opened_food_ids))*100:.1f}%)")
+          f"({len(opened_matched)/max(1,len(opened_food_ids))*100:.1f}%) 단계별={dict(tier_counts_opened)}")
     print(f"  -> 소멸 매칭 {len(closed_matched):,}/{len(closed_food_ids):,} "
-          f"({len(closed_matched)/max(1,len(closed_food_ids))*100:.1f}%)")
+          f"({len(closed_matched)/max(1,len(closed_food_ids))*100:.1f}%) 단계별={dict(tier_counts_closed)}")
 
     # ---- 정량화 ----
-    cur_snapshot_date = int(f"{args.current_quarter}30") if args.current_quarter.endswith("06") else None
-    # 202606 스냅샷 "최신" 시점 = 2026-06-30 로 취급(질문 3의 "허가일이 2025-06-30 이전" 기준용 X,
-    # 실제 요청은 "2025-06-30 이전 = 등록 지연으로 신규 오판" 이므로 고정 임계값 사용.
     LATE_REG_THRESHOLD = 20250630
 
-    opened_pre_threshold = sum(1 for _sid, _st, c, _d in opened_matched
-                                if (p := parse_ymd(c["prms_dt"])) is not None and p <= LATE_REG_THRESHOLD)
-    opened_year_dist = Counter(bucket_year(parse_ymd(c["prms_dt"])) for _sid, _st, c, _d in opened_matched)
+    opened_pre_threshold = sum(1 for r, _t, _d in opened_matched.values()
+                                if r["license_date"] is not None and r["license_date"] <= LATE_REG_THRESHOLD)
+    opened_year_dist = Counter(bucket_year(r["license_date"]) for r, _t, _d in opened_matched.values())
 
-    closed_still_open = sum(1 for _sid, _st, c, _d in closed_matched if not c["clsbiz_dt"])
+    closed_still_open = sum(1 for r, _t, _d in closed_matched.values() if r["close_date"] is None)
     closed_clsbiz_dist = Counter()
-    for _sid, _st, c, _d in closed_matched:
-        cd = c["clsbiz_dt"]
-        if not cd:
+    for r, _t, _d in closed_matched.values():
+        cd = r["close_date"]
+        if cd is None:
             closed_clsbiz_dist["영업중(폐업일 없음)"] += 1
         else:
-            y = cd[:4]
-            if y < "2020":
+            y = cd // 10000
+            if y < 2020:
                 closed_clsbiz_dist["2019이전"] += 1
-            elif y <= "2024":
+            elif y <= 2024:
                 closed_clsbiz_dist["2020~2024"] += 1
-            elif cd < "20250701":
+            elif cd < 20250701:
                 closed_clsbiz_dist["2025H1"] += 1
             else:
                 closed_clsbiz_dist["2025H2~2026"] += 1
 
-    # I1200 자체 기준 2025-07~2026-06 허가/폐업 건수(전체 I1200, 식품접객업 전체)
+    # 인허가데이터 자체 기준 2025-07~2026-06 허가/폐업 건수(전국, 식품접객업 전체)
     window_lo, window_hi = 20250701, 20260630
-    i1200_licensed_in_window = 0
-    i1200_closed_in_window = 0
-    i1200_all = 0
-    for name_bucket in i1200_by_name.values():
-        for r in name_bucket:
-            i1200_all += 1
-            p = parse_ymd(r["prms_dt"])
-            if p is not None and window_lo <= p <= window_hi:
-                i1200_licensed_in_window += 1
-            cd = parse_ymd(r["clsbiz_dt"])
-            if cd is not None and window_lo <= cd <= window_hi:
-                i1200_closed_in_window += 1
+    ld_licensed_in_window = sum(1 for r in ld_records if r["license_date"] and window_lo <= r["license_date"] <= window_hi)
+    ld_closed_in_window = sum(1 for r in ld_records if r["close_date"] and window_lo <= r["close_date"] <= window_hi)
 
-    # 스타벅스 철산역 사례 추적 (실제 상호명은 "스타벅스" 단독 — 지점명이 따로 없고
-    # 주소로만 철산역점임을 알 수 있음, 2026-09-21 확인)
+    # 스타벅스 철산역 사례 추적
     starbucks_case = None
     for sid, st in cur.items():
         if st.name == "스타벅스" and st.road and "철산로 15" in st.road:
-            res = match_store(st, i1200_by_name, args.radius_m)
+            hit = opened_matched.get(sid)
             starbucks_case = {
                 "상가업소번호": sid, "상호명": st.name, "도로명주소": st.road,
-                "신규여부": sid in final_opened_ids,
+                "신규여부(소진공 기준)": sid in final_opened_ids,
                 "lon": st.lon, "lat": st.lat,
-                "매칭": None if res is None else {
-                    "i1200_상호명": res[0]["name"], "허가일": res[0]["prms_dt"],
-                    "폐업일": res[0]["clsbiz_dt"], "거리m": round(res[1], 1),
-                    "관리번호": res[0]["lcns_no"],
+                "매칭": None if hit is None else {
+                    "인허가_사업장명": hit[0]["name"], "허가일": hit[0]["license_date"],
+                    "폐업일": hit[0]["close_date"], "매칭방식": hit[1],
+                    "거리m": hit[2], "관리번호": hit[0]["mgmt_no"],
+                    "인허가_도로명주소": hit[0]["road"],
                 },
             }
             break
 
     report = {
-        "note_추측표시": "이 파일의 비율/건수는 정규화상호명+좌표50m 매칭 기반 추정이며, "
-                       "I1200 오픈API 의 LOCP_ADDR 이 시군구수준이라 도로명주소 매칭(과제 키 ①③)은 "
-                       "불가능했다(조사 결과, 추측 아님). 매칭 자체(어느 상가가 어느 인허가와 같은 "
-                       "가게인지)는 이름+좌표 근접이라는 발견적 방법이므로 개별 건은 오매칭 가능성이 있다.",
+        "note_추측표시": (
+            "매칭은 ①정규화상호명+도로명주소(첫콤마전) 정확일치 ②정규화상호명+좌표"
+            f"{args.radius_m:.0f}m ③도로명주소 단독(그 주소에 양쪽 다 미매칭 1개씩일 때만) "
+            "순서로 시도. ③은 과제가 요청한 '층/호 단독' 대신 '도로명주소(건물)단독'을 "
+            "쓴 근사(자유서식 층/호 텍스트 파싱이 불안정해 완화함) — 표시된 추측. "
+            "그 외 매칭 자체는 결정론적 키 매칭이라 근접매칭(②) 반경 안에서의 개별 오매칭"
+            "가능성 외에는 추측이 아님."
+        ),
         "radius_m": args.radius_m,
         "quarter": {"current": args.current_quarter, "previous": args.previous_quarter},
         "final_opened_total": len(final_opened_ids),
         "final_closed_total": len(final_closed_ids),
         "food_large_code": food_code,
+        "localdata_per_file_stats": per_file_stats,
         "opened_food": {
             "count": len(opened_food_ids),
             "ratio_of_all_opened": round(len(opened_food_ids) / max(1, len(final_opened_ids)), 4),
             "matched_count": len(opened_matched),
             "matched_ratio": round(len(opened_matched) / max(1, len(opened_food_ids)), 4),
-            "matched_pre_20250630_prms_dt_count": opened_pre_threshold,
-            "matched_pre_20250630_prms_dt_ratio": round(opened_pre_threshold / max(1, len(opened_matched)), 4),
-            "prms_year_distribution": dict(opened_year_dist),
+            "matched_by_tier": dict(tier_counts_opened),
+            "matched_pre_20250630_license_date_count": opened_pre_threshold,
+            "matched_pre_20250630_license_date_ratio": round(opened_pre_threshold / max(1, len(opened_matched)), 4),
+            "license_year_distribution": dict(opened_year_dist),
         },
         "closed_food": {
             "count": len(closed_food_ids),
             "ratio_of_all_closed": round(len(closed_food_ids) / max(1, len(final_closed_ids)), 4),
             "matched_count": len(closed_matched),
             "matched_ratio": round(len(closed_matched) / max(1, len(closed_food_ids)), 4),
+            "matched_by_tier": dict(tier_counts_closed),
             "matched_still_operating_count": closed_still_open,
             "matched_still_operating_ratio": round(closed_still_open / max(1, len(closed_matched)), 4),
-            "clsbiz_distribution": dict(closed_clsbiz_dist),
+            "close_date_distribution": dict(closed_clsbiz_dist),
         },
-        "i1200_ground_truth_window_20250701_20260630": {
-            "i1200_rows_with_coord_used": i1200_all,
-            "licensed_in_window": i1200_licensed_in_window,
-            "closed_in_window": i1200_closed_in_window,
+        "localdata_ground_truth_window_20250701_20260630": {
+            "localdata_food_rows_total": len(ld_records),
+            "licensed_in_window": ld_licensed_in_window,
+            "closed_in_window": ld_closed_in_window,
             "vs_sangga_opened_food": len(opened_food_ids),
             "vs_sangga_closed_food": len(closed_food_ids),
         },
         "starbucks_cheolsan_case": starbucks_case,
-        "i1200_fetch_status": {
-            "rows_used": i1200_total,
-            "note": "i1200_raw.ndjson 이 fetch_i1200.py 진행 상태에 따라 부분본일 수 있음 — "
-                    "progress.json 의 rows_written/total_count 로 완결 여부 확인",
-        },
     }
 
     (out_dir / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     map_path = out_dir / "store_license_map.ndjson"
     with open(map_path, "w", encoding="utf-8") as f:
-        for sid, st, c, d in opened_matched:
+        for sid, (r, tier, d) in opened_matched.items():
             f.write(json.dumps({
                 "상가업소번호": sid, "구분": "opened",
-                "허가일": c["prms_dt"], "폐업일": c["clsbiz_dt"],
-                "영업상태": "영업중" if not c["clsbiz_dt"] else "폐업",
-                "인허가관리번호": c["lcns_no"], "거리m": round(d, 1),
+                "허가일": r["license_date"], "폐업일": r["close_date"],
+                "영업상태": r["status_name"], "인허가관리번호": r["mgmt_no"],
+                "매칭방식": tier, "거리m": d,
             }, ensure_ascii=False) + "\n")
-        for sid, st, c, d in closed_matched:
+        for sid, (r, tier, d) in closed_matched.items():
             f.write(json.dumps({
                 "상가업소번호": sid, "구분": "closed",
-                "허가일": c["prms_dt"], "폐업일": c["clsbiz_dt"],
-                "영업상태": "영업중" if not c["clsbiz_dt"] else "폐업",
-                "인허가관리번호": c["lcns_no"], "거리m": round(d, 1),
+                "허가일": r["license_date"], "폐업일": r["close_date"],
+                "영업상태": r["status_name"], "인허가관리번호": r["mgmt_no"],
+                "매칭방식": tier, "거리m": d,
             }, ensure_ascii=False) + "\n")
 
     print(f"[build-license] report.json / store_license_map.ndjson 저장: {out_dir}")

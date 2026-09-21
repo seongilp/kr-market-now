@@ -42,6 +42,10 @@ export interface Meta {
     closed: number;
     /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정해 신규·소멸에서 뺀 수 */
     renamed?: number;
+  /** 파생값: 소진공엔 올해 처음 등록됐지만 인허가일이 1년 전보다 오래돼 신규에서 뺀 수 */
+  stale?: number;
+  /** 파생값: 소진공에선 빠졌지만 인허가상 영업 중이라 소멸에서 뺀 수 */
+  unverified?: number;
   };
   /** 데이터 출처와 opened/closed 의 파생값 성격을 설명하는 문구 */
   sourceNote: string;
@@ -99,6 +103,10 @@ export interface Meta {
 export interface SigunguSummary {
   /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정한 수(신규·소멸에서 제외됨). 구버전 데이터엔 없음 */
   renamed?: number;
+  /** 파생값: 소진공엔 올해 처음 등록됐지만 인허가일이 1년 전보다 오래돼 신규에서 뺀 수 */
+  stale?: number;
+  /** 파생값: 소진공에선 빠졌지만 인허가상 영업 중이라 소멸에서 뺀 수 */
+  unverified?: number;
   /** 시군구코드(5자리, 원본 CSV의 시군구코드 컬럼) */
   code: string;
   /** 시도명 */
@@ -134,6 +142,10 @@ export interface DongSummary {
   closed: number;
   /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정한 수(신규·소멸에서 제외됨). 구버전 데이터엔 없음 */
   renamed?: number;
+  /** 파생값: 소진공엔 올해 처음 등록됐지만 인허가일이 1년 전보다 오래돼 신규에서 뺀 수 */
+  stale?: number;
+  /** 파생값: 소진공에선 빠졌지만 인허가상 영업 중이라 소멸에서 뺀 수 */
+  unverified?: number;
   /** 파생값, 소수 3자리 */
   turnoverRate: number;
   /** 이 행정동에서 최신 분기 점포 수가 많은 업종중분류 상위 8개 */

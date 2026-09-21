@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { QuarterLegend } from '@/components/quarter-legend';
 
-import { BASE_STYLE, CLOSED_COLOR, OPENED_COLOR, RENAMED_COLOR, addChangeLayers, ensurePmtilesProtocol, setKindVisible, type Kind } from '@/lib/map-tiles';
+import { BASE_STYLE, KINDS, KIND_COLOR, KIND_LABEL, addChangeLayers, ensurePmtilesProtocol, setKindVisible, type Kind } from '@/lib/map-tiles';
 
 export interface MapBounds {
   west: number;
@@ -20,20 +20,17 @@ export function ChangeMap({
   code,
   regionName,
   bounds,
-  opened,
-  closed,
-  renamed,
+  counts,
 }: {
   code: string;
   regionName: string;
   bounds: MapBounds;
-  opened: number;
-  closed: number;
-  renamed: number;
+  /** 토글에 붙일 개수(있는 것만) */
+  counts: Partial<Record<Kind, number>>;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const [show, setShow] = useState<Record<Kind, boolean>>({ opened: true, closed: true, renamed: true });
+  const [show, setShow] = useState<Record<Kind, boolean>>({ opened: true, closed: true, renamed: true, stale: true, unverified: true });
 
   useEffect(() => {
     if (!container.current || mapRef.current) return;
@@ -62,9 +59,9 @@ export function ChangeMap({
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Toggle on={show.opened} color={OPENED_COLOR} label={`새로 생긴 곳 ${opened.toLocaleString()}`} onClick={() => setShow((s) => ({ ...s, opened: !s.opened }))} />
-        <Toggle on={show.closed} color={CLOSED_COLOR} label={`사라진 곳 ${closed.toLocaleString()}`} onClick={() => setShow((s) => ({ ...s, closed: !s.closed }))} />
-        <Toggle on={show.renamed} color={RENAMED_COLOR} label={`같은 업종 교체 ${renamed.toLocaleString()}`} onClick={() => setShow((s) => ({ ...s, renamed: !s.renamed }))} />
+        {KINDS.slice().reverse().map((k) => (
+          <Toggle key={k} on={show[k]} color={KIND_COLOR[k]} label={`${KIND_LABEL[k]}${counts[k] !== undefined ? ` ${counts[k].toLocaleString()}` : ''}`} onClick={() => setShow((s) => ({ ...s, [k]: !s[k] }))} />
+        ))}
       </div>
       <div
         ref={container}

@@ -158,7 +158,7 @@ export default function Home() {
 
       <p className="rounded-xl bg-[#F9FAFB] p-4 text-xs text-muted-foreground">
         신규·소멸·전환·브랜드는 원본에 있는 값이 아니라 두 분기 목록을 상가업소번호와 상호·주소로 맞춰 본 추정입니다. 번호만
-        바뀐 가게는 같은 가게로 이어 붙였고{meta.totals.renamed ? `, 같은 자리에 같은 세부업종으로 상호가 바뀐 ${meta.totals.renamed.toLocaleString()}곳(개명 또는 교체)은 신규·소멸 어느 쪽에도 넣지 않았습니다` : ''}. 전국{' '}
+        바뀐 가게는 같은 가게로 이어 붙였고{meta.totals.renamed ? `, 같은 자리에 같은 세부업종으로 상호가 바뀐 ${meta.totals.renamed.toLocaleString()}곳(개명 또는 교체)은 신규·소멸 어느 쪽에도 넣지 않았습니다` : ''}{meta.totals.stale ? `. 음식점·카페·주점은 인허가 데이터와 맞춰, 올해 처음 등록됐어도 인허가가 1년 전보다 오래된 ${meta.totals.stale.toLocaleString()}곳은 신규에서, 인허가상 영업 중인 ${(meta.totals.unverified ?? 0).toLocaleString()}곳은 소멸에서 뺐습니다` : ''}. 전국{' '}
         {opened.toLocaleString()}곳 신규, {closed.toLocaleString()}곳 소멸.
       </p>
     </div>

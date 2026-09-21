@@ -93,8 +93,8 @@ export default async function RegionPage({ params }: PageProps<'/r/[code]'>) {
 
       <section className="grid gap-3 sm:grid-cols-4">
         <Stat label="상가" value={region.stores.toLocaleString()} sub={`1년 전 ${region.prevStores.toLocaleString()}곳`} />
-        <Stat label="새로 생긴 곳" value={region.opened.toLocaleString()} tone="up" />
-        <Stat label="사라진 곳" value={region.closed.toLocaleString()} tone="down" sub={region.renamed ? `같은 업종 교체 ${region.renamed.toLocaleString()}곳은 별도` : undefined} />
+        <Stat label="새로 생긴 곳" value={region.opened.toLocaleString()} tone="up" sub={region.stale ? `등록만 늦은 ${region.stale.toLocaleString()}곳은 제외` : undefined} />
+        <Stat label="사라진 곳" value={region.closed.toLocaleString()} tone="down" sub={[region.renamed ? `같은 업종 교체 ${region.renamed.toLocaleString()}` : '', region.unverified ? `소멸 미확인 ${region.unverified.toLocaleString()}` : ''].filter(Boolean).join(' · ') || undefined} />
         <Stat label="1년 소멸률" value={pct(region.closed / region.prevStores)} sub={`전국 ${pct(nationalClose)}`} />
       </section>
 
@@ -183,7 +183,7 @@ export default async function RegionPage({ params }: PageProps<'/r/[code]'>) {
         <h2 className="mb-1 text-lg font-semibold">지도에서 보기</h2>
         <p className="mb-3 text-sm text-muted-foreground">파란 점이 새로 생긴 곳, 빨간 점이 사라진 곳. 점을 누르면 상호와 업종이 나옵니다.</p>
         {mapBounds ? (
-          <ChangeMap code={region.code} regionName={region.name} bounds={mapBounds} opened={region.opened} closed={region.closed} renamed={region.renamed ?? 0} />
+          <ChangeMap code={region.code} regionName={region.name} bounds={mapBounds} counts={{ opened: region.opened, closed: region.closed, renamed: region.renamed ?? 0, stale: region.stale, unverified: region.unverified }} />
         ) : (
           <p className="text-sm text-muted-foreground">지도로 보여줄 좌표가 없습니다.</p>
         )}

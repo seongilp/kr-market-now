@@ -7,6 +7,10 @@ export const OPENED_COLOR = '#3182F6';
 export const CLOSED_COLOR = '#E5484D';
 /** 같은 자리·같은 세부업종으로 바뀐 곳 — 개명일 수도, 새 주인(교체)일 수도 있다 */
 export const RENAMED_COLOR = '#8B95A1';
+/** 소진공엔 올해 처음 등록됐지만 인허가일이 1년 전보다 오래된 곳 — 새로 생긴 게 아니라 등록만 늦음 */
+export const STALE_COLOR = '#B7C4D6';
+/** 소진공에선 사라졌지만 인허가상 아직 영업 중인 곳 — 소멸로 볼 근거가 없음 */
+export const UNVERIFIED_COLOR = '#E3C7A6';
 
 /**
  * 분기(q=1..4)별 색 농도. 옅을수록 오래전, 진할수록 최근.
@@ -34,9 +38,24 @@ export const TILES_LAYER = 'changes';
 /** 타일에 점이 들어 있는 최소 줌 (scripts/build-tiles.py 의 -Z 와 맞춘다) */
 export const TILES_MIN_ZOOM = 6;
 
-export type Kind = 'opened' | 'closed' | 'renamed';
-export const KINDS: readonly Kind[] = ['closed', 'renamed', 'opened'];
-const KIND_CODE: Record<Kind, number> = { closed: 0, opened: 1, renamed: 2 };
+export type Kind = 'opened' | 'closed' | 'renamed' | 'stale' | 'unverified';
+export const KINDS: readonly Kind[] = ['unverified', 'stale', 'closed', 'renamed', 'opened'];
+/** 타일 속성 k: 0 소멸, 1 신규, 2 같은 업종 교체, 3 예전부터 영업(등록 지연), 4 소멸 미확인(인허가상 영업 중) */
+const KIND_CODE: Record<Kind, number> = { closed: 0, opened: 1, renamed: 2, stale: 3, unverified: 4 };
+export const KIND_COLOR: Record<Kind, string> = {
+  opened: OPENED_COLOR,
+  closed: CLOSED_COLOR,
+  renamed: RENAMED_COLOR,
+  stale: STALE_COLOR,
+  unverified: UNVERIFIED_COLOR,
+};
+export const KIND_LABEL: Record<Kind, string> = {
+  opened: '새로 생긴 곳',
+  closed: '사라진 곳',
+  renamed: '같은 업종 교체',
+  stale: '예전부터 영업',
+  unverified: '소멸 미확인',
+};
 
 /** 타일 피처 속성: k=1 신규/0 소멸, n 상호, u 업종, d 행정동, r 주소, s 시군구코드 */
 export interface TileProps {
@@ -50,6 +69,10 @@ export interface TileProps {
   q?: number;
   /** k=2(간판 바뀜 추정)일 때 이전 상호 */
   p?: string;
+  /** 인허가일 YYYYMMDD (식품접객업만, 인허가 데이터와 이어진 경우) */
+  a?: string;
+  /** 폐업일 YYYYMMDD (인허가 데이터상 폐업한 경우) */
+  c?: string;
 }
 
 let registered = false;
@@ -82,7 +105,15 @@ export function addChangeLayers(
       paint: {
         'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 1.5, 11, 2.5, 14, 5, 17, 8],
         'circle-color':
-          kind === 'opened' ? rampExpression(OPENED_RAMP, OPENED_COLOR) : kind === 'closed' ? rampExpression(CLOSED_RAMP, CLOSED_COLOR) : RENAMED_COLOR,
+          kind === 'opened'
+            ? rampExpression(OPENED_RAMP, OPENED_COLOR)
+            : kind === 'closed'
+              ? rampExpression(CLOSED_RAMP, CLOSED_COLOR)
+              : kind === 'renamed'
+                ? RENAMED_COLOR
+                : kind === 'stale'
+                  ? STALE_COLOR
+                  : UNVERIFIED_COLOR,
         'circle-opacity': ['interpolate', ['linear'], ['zoom'], 8, 0.55, 12, 0.85],
         'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 10, 0, 13, 1],
         'circle-stroke-color': '#ffffff',
@@ -106,7 +137,26 @@ export function setKindVisible(map: maplibregl.Map, show: Record<Kind, boolean>)
   }
 }
 
+function ymd(v?: string): string {
+  return v && v.length === 8 ? `${v.slice(0, 4)}-${v.slice(4, 6)}-${v.slice(6, 8)}` : '';
+}
+
 function popupHtml(p: TileProps): string {
+  const license = p.a ? `<div style="color:#8B95A1">인허가 ${ymd(p.a)}${p.c ? ` · 폐업 ${ymd(p.c)}` : ''}</div>` : '';
+  if (p.k === 3) {
+    return (
+      `<div style="font:13px/1.5 Pretendard,system-ui;color:#191F28"><b>${escapeHtml(p.n)}</b>` +
+      `<div style="color:#5B6B85">예전부터 영업 · 상가정보에는 올해 처음 등록됨 · ${escapeHtml(p.u)}</div>` +
+      license + `<div style="color:#8B95A1">${escapeHtml(p.d)} · ${escapeHtml(p.r)}</div></div>`
+    );
+  }
+  if (p.k === 4) {
+    return (
+      `<div style="font:13px/1.5 Pretendard,system-ui;color:#191F28"><b>${escapeHtml(p.n)}</b>` +
+      `<div style="color:#9A6B2F">소멸 미확인 · 상가정보에선 빠졌지만 인허가상 영업 중 · ${escapeHtml(p.u)}</div>` +
+      license + `<div style="color:#8B95A1">${escapeHtml(p.d)} · ${escapeHtml(p.r)}</div></div>`
+    );
+  }
   if (p.k === 2) {
     return (
       `<div style="font:13px/1.5 Pretendard,system-ui;color:#191F28"><b>${escapeHtml(p.n)}</b>` +
@@ -119,7 +169,7 @@ function popupHtml(p: TileProps): string {
   const when = q >= 1 && q <= 4 ? (opened ? `${QUARTER_LABELS.opened[q - 1]}에 생김` : `${QUARTER_LABELS.closed[q - 1]} 사이 사라짐`) : opened ? '새로 생긴 곳' : '사라진 곳';
   return (
     `<div style="font:13px/1.5 Pretendard,system-ui;color:#191F28"><b>${escapeHtml(p.n)}</b>` +
-    `<div style="color:${opened ? OPENED_COLOR : CLOSED_COLOR}">${when} · ${escapeHtml(p.u)}</div>` +
+    `<div style="color:${opened ? OPENED_COLOR : CLOSED_COLOR}">${when} · ${escapeHtml(p.u)}</div>` + license +
     `<div style="color:#8B95A1">${escapeHtml(p.d)} · ${escapeHtml(p.r)}</div></div>`
   );
 }
