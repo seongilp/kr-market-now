@@ -1,29 +1,35 @@
 #!/usr/bin/env python3
 """상권나우 신규/소멸 점포 전량 PMTiles 빌드 스크립트.
 
-`scripts/build-data.py` 와 같은 원천(소진공 상가(상권)정보 분기 스냅샷 zip 2개)을
-같은 규칙(상가업소번호 diff, 이전 분기는 RegionRemapper 로 시군구/행정동 코드 보정)
-으로 다시 읽어서, `public/data/changes/*.json` 표본(시군구당 ~1,000+1,000) 대신
+`scripts/build-data.py` 와 같은 원천(소진공 상가(상권)정보 분기 스냅샷 zip)을 같은
+규칙(상가업소번호 diff, 최신 분기 기준 RegionRemapper 로 시군구/행정동 코드 보정)으로
+다시 읽어서, `public/data/changes/*.json` 표본(시군구당 ~1,000+1,000) 대신
 **신규/소멸 점포 전량**을 NDJSON GeoJSON Feature 스트림으로 스크래치에 쓴다.
 그 다음 tippecanoe 로 `public/tiles/changes.pmtiles` 를 만든다.
 
-표준 라이브러리만 사용(대용량 스트리밍: zipfile + csv, 메모리에 전체를 올리지 않음).
-build-data.py 와 달리 diff 를 위해 각 분기 store_id 집합만 메모리에 유지하면 되므로
-레코드 자체는 스트리밍 중에 바로 파일로 흘려보낸다 — 단, 신규(diff)는 "최신에만 있는
-id" 를 알아야 하므로 이전 분기 id 집합을 먼저 모두 읽어야 한다. 아래 2-pass 구조:
+opened/closed 여부는 기존과 같이 첫 분기(QUARTERS[0])↔마지막 분기(QUARTERS[-1]) 비교로
+정해진다. 이번 확장은 그 사이 3개 분기 스냅샷을 추가로 읽어 "언제" 생기고 사라졌는지
+분기 단위 근사치(속성 `q`, 1~4)를 덧붙인다:
 
-  1) 이전 분기를 스트리밍하며 store_id 집합만 저장(레코드는 버림) — 메모리: set[str] 하나.
-     동시에 이전 분기 레코드를 임시 NDJSON(제자리)으로 한 번 더 스트리밍 저장하지 않고,
-     "소멸" 판정을 위해 필요한 (레코드, id) 를 그때그때 판단할 수 없으므로 아래처럼 처리:
-     - 최신 분기 store_id 집합을 먼저 만든다(reader 1회).
-     - 이전 분기를 스트리밍하며, id 가 "최신 집합에 없으면"(=소멸) 그 자리에서 바로
-       GeoJSON Feature 로 써버린다. 레코드를 메모리에 쌓지 않는다.
-     - 최신 분기를 다시 스트리밍하며, id 가 "이전 집합에 없으면"(=신규) 바로 써버린다.
-  이러면 메모리에는 store_id 문자열 집합 두 개(각 ~270만~280만 개)만 있으면 된다.
+  - opened(마지막 분기에 있고 첫 분기에 없음): QUARTERS[1:] 중 **처음 등장한 분기**의
+    순번(1-based). 중간에 잠깐 없어졌다 다시 나온 경우도 "처음 등장" 기준.
+  - closed(첫 분기에 있고 마지막 분기에 없음): QUARTERS[:-1] 중 **마지막으로 보인 분기**의
+    순번(1-based, QUARTERS[0]=1).
+
+표준 라이브러리만 사용(대용량 스트리밍: zipfile + csv, 메모리에 전체를 올리지 않음).
+레코드 자체(좌표/속성)는 첫 분기(closed)/마지막 분기(opened)에서만 읽고 그 자리에서 바로
+파일로 흘려보낸다. 중간 3개 분기는 store_id 집합만 메모리에 유지한다(각 ~270만개,
+5개 집합 모두 올려도 감당 가능한 수준). 2-pass 구조:
+
+  1) 모든 분기의 store_id 집합을 먼저 만든다(각 분기 1회 스트리밍, 레코드는 버림).
+  2) 첫 분기를 다시 스트리밍하며, id 가 마지막 분기 집합에 없으면(=소멸) 그 자리에서
+     바로 GeoJSON Feature 로 쓴다(q 는 1)의 나머지 분기 집합들로 즉시 계산).
+  3) 마지막 분기를 다시 스트리밍하며, id 가 첫 분기 집합에 없으면(=신규) 마찬가지로 쓴다.
 
 사용법:
     python3 scripts/build-tiles.py \
-        --current-zip <202606 zip> --previous-zip <202506 zip> \
+        --zip 202506=<zip> --zip 202509=<zip> --zip 202512=<zip> \
+        --zip 202603=<zip> --zip 202606=<zip> \
         --ndjson <스크래치>/changes.ndjson
 """
 
@@ -38,6 +44,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
+
+# 5개 분기 스냅샷 순서(오래된 -> 최신). opened/closed 의 기준 분기(첫/마지막)와
+# q 속성의 분기 순번은 모두 이 리스트 순서를 기준으로 한다.
+QUARTERS = ["202506", "202509", "202512", "202603", "202606"]
 
 COLUMNS = [
     "상가업소번호", "상호명", "지점명", "상권업종대분류코드", "상권업종대분류명",
@@ -122,7 +132,7 @@ def parse_coord(lon_raw: str, lat_raw: str):
     return lon, lat
 
 
-def make_feature(row: list[str], k: int, sigungu_code: str) -> str:
+def make_feature(row: list[str], k: int, sigungu_code: str, q: int) -> str:
     name = row[NAME]
     branch = row[BRANCH]
     n = f"{name} {branch}" if branch else name
@@ -137,6 +147,7 @@ def make_feature(row: list[str], k: int, sigungu_code: str) -> str:
         "d": row[DONG_NAME],
         "r": road,
         "s": sigungu_code,
+        "q": q,
     }
     import json
 
@@ -148,10 +159,24 @@ def make_feature(row: list[str], k: int, sigungu_code: str) -> str:
     return json.dumps(feature, ensure_ascii=False)
 
 
+def parse_zip_arg(raw: str) -> tuple[str, Path]:
+    if "=" not in raw:
+        raise argparse.ArgumentTypeError(f"--zip 은 <분기>=<zip경로> 형식이어야 함: {raw!r}")
+    quarter, _, path_str = raw.partition("=")
+    if quarter not in QUARTERS:
+        raise argparse.ArgumentTypeError(
+            f"--zip 분기는 QUARTERS 중 하나여야 함({QUARTERS}): {quarter!r}"
+        )
+    return quarter, Path(path_str)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--current-zip", required=True, type=Path)
-    ap.add_argument("--previous-zip", required=True, type=Path)
+    ap.add_argument(
+        "--zip", dest="zips", action="append", required=True, type=parse_zip_arg,
+        metavar="분기=경로",
+        help="예: --zip 202506=<zip경로> (QUARTERS 5개 전부 필요)",
+    )
     ap.add_argument("--ndjson", required=True, type=Path)
     ap.add_argument(
         "--region-map", type=Path,
@@ -159,62 +184,110 @@ def main():
     )
     args = ap.parse_args()
 
-    print(f"[build-tiles] 최신 분기 id 집합 수집: {args.current_zip}")
-    cur_ids = collect_ids(args.current_zip)
-    print(f"  -> {len(cur_ids):,} ids")
+    zip_by_quarter: dict[str, Path] = dict(args.zips)
+    missing = [q for q in QUARTERS if q not in zip_by_quarter]
+    if missing:
+        raise SystemExit(f"[build-tiles] --zip 누락: {missing} (QUARTERS={QUARTERS})")
 
-    print(f"[build-tiles] 최신 분기 행정동 인덱스 수집(remap 용): {args.current_zip}")
-    cur_dong_meta = collect_dong_meta(args.current_zip)
+    first_quarter, last_quarter = QUARTERS[0], QUARTERS[-1]
+    first_zip, last_zip = zip_by_quarter[first_quarter], zip_by_quarter[last_quarter]
+    # opened q 판정에 쓰는 후보 분기(오래된 -> 최신, 첫 분기 제외)
+    opened_q_quarters = QUARTERS[1:]
+    # closed q 판정에 쓰는 후보 분기(오래된 -> 최신, 마지막 분기 제외)
+    closed_q_quarters = QUARTERS[:-1]
+
+    print(f"[build-tiles] 최신 분기({last_quarter}) id 집합 수집: {last_zip}")
+    last_ids = collect_ids(last_zip)
+    print(f"  -> {len(last_ids):,} ids")
+
+    print(f"[build-tiles] 최신 분기({last_quarter}) 행정동 인덱스 수집(remap 용): {last_zip}")
+    cur_dong_meta = collect_dong_meta(last_zip)
     cur_dong_by_sigungu = build_cur_dong_index(cur_dong_meta)
     region_map = load_region_map(args.region_map)
     remapper = RegionRemapper(region_map, cur_dong_by_sigungu)
 
-    print(f"[build-tiles] 이전 분기 id 집합 수집: {args.previous_zip}")
-    prev_ids = collect_ids(args.previous_zip)
-    print(f"  -> {len(prev_ids):,} ids")
+    print(f"[build-tiles] 첫 분기({first_quarter}) id 집합 수집: {first_zip}")
+    first_ids = collect_ids(first_zip)
+    print(f"  -> {len(first_ids):,} ids")
+
+    # 중간 3개 분기의 id 집합(q 판정용). {분기: set[str]}
+    mid_ids: dict[str, set[str]] = {}
+    for quarter in QUARTERS[1:-1]:
+        zpath = zip_by_quarter[quarter]
+        print(f"[build-tiles] 중간 분기({quarter}) id 집합 수집: {zpath}")
+        mid_ids[quarter] = collect_ids(zpath)
+        print(f"  -> {len(mid_ids[quarter]):,} ids")
+
+    def ids_of(quarter: str) -> set[str]:
+        if quarter == first_quarter:
+            return first_ids
+        if quarter == last_quarter:
+            return last_ids
+        return mid_ids[quarter]
+
+    def opened_q(store_id: str) -> int:
+        """오래된 -> 최신 순으로 처음 등장한 분기의 1-based 순번."""
+        for i, quarter in enumerate(opened_q_quarters, start=1):
+            if store_id in ids_of(quarter):
+                return i
+        return len(opened_q_quarters)  # 마지막 분기에만 있음(안전망)
+
+    def closed_q(store_id: str) -> int:
+        """오래된 -> 최신 순으로 마지막으로 보인 분기의 1-based 순번."""
+        last_seen = 1
+        for i, quarter in enumerate(closed_q_quarters, start=1):
+            if store_id in ids_of(quarter):
+                last_seen = i
+        return last_seen
 
     args.ndjson.parent.mkdir(parents=True, exist_ok=True)
 
     opened_written = closed_written = 0
     opened_dropped = closed_dropped = 0
+    opened_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
+    closed_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
 
     with args.ndjson.open("w", encoding="utf-8") as out:
-        print("[build-tiles] 이전 분기 스트리밍 -> 소멸(closed, k=0) 판정")
-        for row in iter_rows(args.previous_zip):
+        print(f"[build-tiles] 첫 분기({first_quarter}) 스트리밍 -> 소멸(closed, k=0) 판정")
+        for row in iter_rows(first_zip):
             store_id = row[ID]
-            if store_id in cur_ids:
+            if store_id in last_ids:
                 continue  # 공통 id: 소멸 아님
             sigungu_code = row[SIGUNGU_CODE]
             dong_name = row[DONG_NAME]
-            dong_code = row[DONG_CODE]
             if remapper.is_affected(sigungu_code):
-                new_sigungu_code = remapper.resolve_sigungu(sigungu_code, dong_name)
-                sigungu_code = new_sigungu_code
-            feature_line = make_feature(row, 0, sigungu_code)
+                sigungu_code = remapper.resolve_sigungu(sigungu_code, dong_name)
+            q = closed_q(store_id)
+            feature_line = make_feature(row, 0, sigungu_code, q)
             if feature_line is None:
                 closed_dropped += 1
                 continue
             out.write(feature_line)
             out.write("\n")
             closed_written += 1
+            closed_q_hist[q] += 1
 
-        print("[build-tiles] 최신 분기 스트리밍 -> 신규(opened, k=1) 판정")
-        for row in iter_rows(args.current_zip):
+        print(f"[build-tiles] 최신 분기({last_quarter}) 스트리밍 -> 신규(opened, k=1) 판정")
+        for row in iter_rows(last_zip):
             store_id = row[ID]
-            if store_id in prev_ids:
+            if store_id in first_ids:
                 continue  # 공통 id: 신규 아님
             sigungu_code = row[SIGUNGU_CODE]
-            feature_line = make_feature(row, 1, sigungu_code)
+            q = opened_q(store_id)
+            feature_line = make_feature(row, 1, sigungu_code, q)
             if feature_line is None:
                 opened_dropped += 1
                 continue
             out.write(feature_line)
             out.write("\n")
             opened_written += 1
+            opened_q_hist[q] += 1
 
     print("\n=== 요약 ===")
     print(f"opened: written={opened_written:,} dropped(좌표 결측/이상치)={opened_dropped:,}")
+    print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}): {opened_q_hist}")
     print(f"closed: written={closed_written:,} dropped(좌표 결측/이상치)={closed_dropped:,}")
+    print(f"  q 분포(1={closed_q_quarters[0]} .. 4={closed_q_quarters[-1]}): {closed_q_hist}")
     print(f"총 피처 수: {opened_written + closed_written:,}")
     print(f"NDJSON: {args.ndjson}")
 
