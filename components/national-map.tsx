@@ -11,6 +11,7 @@ import {
   BASE_STYLE,
   CLOSED_COLOR,
   OPENED_COLOR,
+  RENAMED_COLOR,
   addChangeLayers,
   ensurePmtilesProtocol,
   escapeHtml,
@@ -43,7 +44,7 @@ function dotFeatures(dots: Dot[]): GeoJSON.FeatureCollection<GeoJSON.Point> {
 export function NationalMap({ dots }: { dots: Dot[] }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const [show, setShow] = useState<Record<Kind, boolean>>({ opened: true, closed: true });
+  const [show, setShow] = useState<Record<Kind, boolean>>({ opened: true, closed: true, renamed: true });
   const [detail, setDetail] = useState(false);
 
   useEffect(() => {
@@ -134,6 +135,7 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Toggle on={show.opened} color={OPENED_COLOR} label="새로 생긴 곳" onClick={() => setShow((s) => ({ ...s, opened: !s.opened }))} />
         <Toggle on={show.closed} color={CLOSED_COLOR} label="사라진 곳" onClick={() => setShow((s) => ({ ...s, closed: !s.closed }))} />
+        <Toggle on={show.renamed} color={RENAMED_COLOR} label="같은 업종 교체" onClick={() => setShow((s) => ({ ...s, renamed: !s.renamed }))} />
         <span className="text-xs text-muted-foreground">
           {detail ? '가게 하나하나가 점입니다. 점을 누르면 상호가 나옵니다.' : '지도를 확대하면 가게 하나하나가 점으로 나옵니다.'}
         </span>
