@@ -7,7 +7,8 @@ export const OPENED_COLOR = '#3182F6';
 export const CLOSED_COLOR = '#E5484D';
 export const BASE_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 
-export const TILES_URL = 'pmtiles:///tiles/changes.pmtiles';
+/** 타일은 Vercel Blob 에 있다(80MB 라 저장소에 안 둔다). 없으면 로컬 public/tiles 로 폴백 */
+export const TILES_URL = `pmtiles://${process.env.NEXT_PUBLIC_TILES_URL ?? '/tiles/changes.pmtiles'}`;
 export const TILES_SOURCE = 'changes';
 export const TILES_LAYER = 'changes';
 /** 타일에 점이 들어 있는 최소 줌 (scripts/build-tiles.py 의 -Z 와 맞춘다) */
