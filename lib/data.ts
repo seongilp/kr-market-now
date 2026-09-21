@@ -62,3 +62,16 @@ export function regionCenter(code: string): { lat: number; lon: number } | undef
     lon: Number((mine.reduce((a, d) => a + d.lon, 0) / mine.length).toFixed(5)),
   };
 }
+
+/** 시군구 동네 원들을 감싸는 범위(지도 초기 화면용). 여유 0.01도 ≈ 1km */
+export function regionBounds(code: string): { west: number; south: number; east: number; north: number } | undefined {
+  const mine = DOTS.filter((d) => d.sigunguCode === code);
+  if (mine.length === 0) return undefined;
+  const pad = 0.01;
+  return {
+    west: Math.min(...mine.map((d) => d.lon)) - pad,
+    south: Math.min(...mine.map((d) => d.lat)) - pad,
+    east: Math.max(...mine.map((d) => d.lon)) + pad,
+    north: Math.max(...mine.map((d) => d.lat)) + pad,
+  };
+}

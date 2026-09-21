@@ -33,7 +33,7 @@ export default function MapPage() {
       </header>
       <NationalMap dots={dots} />
       <p className="rounded-xl bg-[#F9FAFB] p-4 text-xs text-muted-foreground">
-        개별 점은 용량 때문에 지역마다 일부만 추려 담았습니다. 동네 원의 신규·소멸 숫자는 전수 집계입니다.
+        확대하면 신규·소멸 점포 전량이 점으로 나옵니다. 멀리서 볼 때는 밀집 지역의 점을 일부 솎아 그립니다.
       </p>
     </div>
   );

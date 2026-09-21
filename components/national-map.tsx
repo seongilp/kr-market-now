@@ -1,30 +1,23 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import maplibregl, { type GeoJSONSource, type Map as MapLibreMap } from 'maplibre-gl';
+import { useEffect, useRef, useState } from 'react';
+import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import type { ChangeItem, Dot, SigunguChanges } from '@/lib/data-types';
+import type { Dot } from '@/lib/data-types';
+import {
+  BASE_STYLE,
+  CLOSED_COLOR,
+  OPENED_COLOR,
+  addChangeLayers,
+  ensurePmtilesProtocol,
+  escapeHtml,
+  setKindVisible,
+  type Kind,
+} from '@/lib/map-tiles';
 
-const OPENED_COLOR = '#3182F6';
-const CLOSED_COLOR = '#E5484D';
-const BASE_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
-/** 이 줌부터 개별 점을 불러온다. 그 아래에서는 행정동 단위로 뭉쳐 보여준다 */
-const DETAIL_ZOOM = 11.5;
-/** 한 화면에서 한꺼번에 받아올 시군구 수 상한 — 넘으면 더 확대하라고 안내한다 */
-const MAX_REGIONS_IN_VIEW = 12;
-
-type Kind = 'opened' | 'closed';
-
-const EMPTY: GeoJSON.FeatureCollection<GeoJSON.Point> = { type: 'FeatureCollection', features: [] };
-
-function pointFeatures(items: ChangeItem[], kind: Kind): GeoJSON.Feature<GeoJSON.Point>[] {
-  return items.map((it) => ({
-    type: 'Feature',
-    geometry: { type: 'Point', coordinates: [it.lon, it.lat] },
-    properties: { kind, name: it.name + (it.branch ? ` ${it.branch}` : ''), upjong: it.upjong, road: it.road },
-  }));
-}
+/** 이 줌부터 개별 점(전량 타일)을 보여준다. 그 아래에서는 행정동 단위로 뭉친다 */
+const DETAIL_ZOOM = 10.5;
 
 function dotFeatures(dots: Dot[]): GeoJSON.FeatureCollection<GeoJSON.Point> {
   return {
@@ -45,64 +38,16 @@ function dotFeatures(dots: Dot[]): GeoJSON.FeatureCollection<GeoJSON.Point> {
   };
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-}
-
 export function NationalMap({ dots }: { dots: Dot[] }) {
   const container = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
-  const cache = useRef(new Map<string, SigunguChanges>());
   const [show, setShow] = useState<Record<Kind, boolean>>({ opened: true, closed: true });
-  const [hint, setHint] = useState('지도를 확대하면 가게 하나하나가 점으로 나옵니다.');
-
-  /** 화면에 보이는 시군구의 변화 목록을 받아 개별 점 레이어를 채운다 */
-  const loadVisible = useCallback(async (map: MapLibreMap) => {
-    if (map.getZoom() < DETAIL_ZOOM) {
-      (map.getSource('opened') as GeoJSONSource | undefined)?.setData(EMPTY);
-      (map.getSource('closed') as GeoJSONSource | undefined)?.setData(EMPTY);
-      setHint('지도를 확대하면 가게 하나하나가 점으로 나옵니다.');
-      return;
-    }
-    // 확대하면 동네 원 레이어는 숨겨지므로 렌더된 피처가 아니라 지도 범위로 시군구를 고른다
-    const b = map.getBounds();
-    const pad = 0.03; // 약 3km — 동네 원 중심이 화면 밖이어도 그 시군구는 포함
-    b.extend([b.getWest() - pad, b.getSouth() - pad]);
-    b.extend([b.getEast() + pad, b.getNorth() + pad]);
-    const codes = [...new Set(dots.filter((d) => b.contains([d.lon, d.lat])).map((d) => d.sigunguCode))];
-    if (codes.length === 0) {
-      setHint('이 범위에는 집계된 동네가 없습니다. 조금 축소해 보세요.');
-      return;
-    }
-    if (codes.length > MAX_REGIONS_IN_VIEW) {
-      setHint('보이는 지역이 너무 넓습니다. 조금 더 확대해 주세요.');
-      return;
-    }
-
-    setHint('불러오는 중…');
-    await Promise.all(
-      codes
-        .filter((c) => !cache.current.has(c))
-        .map((c) =>
-          fetch(`/data/changes/${c}.json`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((j: SigunguChanges | null) => j && cache.current.set(c, j))
-            .catch(() => null),
-        ),
-    );
-
-    for (const kind of ['opened', 'closed'] as Kind[]) {
-      const features = codes.flatMap((c) => {
-        const data = cache.current.get(c);
-        return data ? pointFeatures(data[kind], kind) : [];
-      });
-      (map.getSource(kind) as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features });
-    }
-    setHint('표본으로 뽑은 점만 표시합니다. 실제 변화는 이보다 많습니다.');
-  }, [dots]);
+  const [detail, setDetail] = useState(false);
 
   useEffect(() => {
     if (!container.current || mapRef.current) return;
+    ensurePmtilesProtocol();
+
     // /map?lat=37.47&lng=126.86&z=13 처럼 위치를 바로 열 수 있다(시군구 페이지에서 링크)
     const q = new URLSearchParams(window.location.search);
     const lat = Number(q.get('lat'));
@@ -135,37 +80,7 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
           'circle-stroke-color': '#ffffff',
         },
       });
-
-      for (const kind of ['closed', 'opened'] as Kind[]) {
-        map.addSource(kind, { type: 'geojson', data: EMPTY });
-        map.addLayer({
-          id: kind,
-          type: 'circle',
-          source: kind,
-          minzoom: DETAIL_ZOOM,
-          paint: {
-            'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3, 15, 5.5, 17, 8],
-            'circle-color': kind === 'opened' ? OPENED_COLOR : CLOSED_COLOR,
-            'circle-opacity': 0.8,
-            'circle-stroke-width': 1,
-            'circle-stroke-color': '#ffffff',
-          },
-        });
-        map.on('click', kind, (e) => {
-          const f = e.features?.[0];
-          if (!f) return;
-          const p = f.properties as { kind: Kind; name: string; upjong: string; road: string };
-          const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates;
-          new maplibregl.Popup({ offset: 10 })
-            .setLngLat([lon, lat])
-            .setHTML(
-              `<div style="font:13px/1.5 Pretendard,system-ui;color:#191F28"><b>${escapeHtml(p.name)}</b>` +
-                `<div style="color:${p.kind === 'opened' ? OPENED_COLOR : CLOSED_COLOR}">${p.kind === 'opened' ? '새로 생긴 곳' : '사라진 곳'} · ${escapeHtml(p.upjong)}</div>` +
-                `<div style="color:#8B95A1">${escapeHtml(p.road)}</div></div>`,
-            )
-            .addTo(map);
-        });
-      }
+      addChangeLayers(map, { minzoom: DETAIL_ZOOM });
 
       map.on('click', 'dots', (e) => {
         const f = e.features?.[0];
@@ -183,29 +98,22 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
           )
           .addTo(map);
       });
-
-      for (const layer of ['dots', 'opened', 'closed']) {
-        map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'));
-        map.on('mouseleave', layer, () => (map.getCanvas().style.cursor = ''));
-      }
-
-      void loadVisible(map);
+      map.on('mouseenter', 'dots', () => (map.getCanvas().style.cursor = 'pointer'));
+      map.on('mouseleave', 'dots', () => (map.getCanvas().style.cursor = ''));
+      setDetail(map.getZoom() >= DETAIL_ZOOM);
     });
-
-    map.on('moveend', () => void loadVisible(map));
+    map.on('zoomend', () => setDetail(map.getZoom() >= DETAIL_ZOOM));
 
     return () => {
       map.remove();
       mapRef.current = null;
     };
-  }, [dots, loadVisible]);
+  }, [dots]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map?.isStyleLoaded()) return;
-    for (const kind of ['opened', 'closed'] as Kind[]) {
-      if (map.getLayer(kind)) map.setLayoutProperty(kind, 'visibility', show[kind] ? 'visible' : 'none');
-    }
+    setKindVisible(map, show);
     if (map.getLayer('dots')) {
       const filter: maplibregl.FilterSpecification | null =
         show.opened && show.closed
@@ -222,19 +130,11 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Toggle
-          on={show.opened}
-          color={OPENED_COLOR}
-          label="새로 생긴 곳"
-          onClick={() => setShow((s) => ({ ...s, opened: !s.opened }))}
-        />
-        <Toggle
-          on={show.closed}
-          color={CLOSED_COLOR}
-          label="사라진 곳"
-          onClick={() => setShow((s) => ({ ...s, closed: !s.closed }))}
-        />
-        <span className="text-xs text-muted-foreground">{hint}</span>
+        <Toggle on={show.opened} color={OPENED_COLOR} label="새로 생긴 곳" onClick={() => setShow((s) => ({ ...s, opened: !s.opened }))} />
+        <Toggle on={show.closed} color={CLOSED_COLOR} label="사라진 곳" onClick={() => setShow((s) => ({ ...s, closed: !s.closed }))} />
+        <span className="text-xs text-muted-foreground">
+          {detail ? '가게 하나하나가 점입니다. 점을 누르면 상호가 나옵니다.' : '지도를 확대하면 가게 하나하나가 점으로 나옵니다.'}
+        </span>
       </div>
       <div
         ref={container}
