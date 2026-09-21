@@ -40,6 +40,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
 from match import find_renamed_pairs, resolve_opened_closed  # noqa: E402
+from license import (  # noqa: E402
+    DEFAULT_LICENSE_MAP_PATH, classify_closed, classify_opened, load_license_map,
+)
 
 # ---------------------------------------------------------------------------
 # CSV 스펙 (39 컬럼, 확인됨)
@@ -269,16 +272,25 @@ def run_sanity_checks(cur: QuarterStats, prev: QuarterStats) -> dict:
 # 산출물 빌더
 # ---------------------------------------------------------------------------
 
-def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids):
+def build_sigungu_json(
+    cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids,
+    stale_ids=frozenset(), unverified_ids=frozenset(),
+):
     opened_by_sigungu = Counter()
     closed_by_sigungu = Counter()
     renamed_by_sigungu = Counter()
+    stale_by_sigungu = Counter()
+    unverified_by_sigungu = Counter()
     for sid in opened_ids:
         opened_by_sigungu[cur.records[sid].sigungu_code] += 1
     for sid in closed_ids:
         closed_by_sigungu[prev.records[sid].sigungu_code] += 1
     for sid in renamed_cur_ids:
         renamed_by_sigungu[cur.records[sid].sigungu_code] += 1
+    for sid in stale_ids:
+        stale_by_sigungu[cur.records[sid].sigungu_code] += 1
+    for sid in unverified_ids:
+        unverified_by_sigungu[prev.records[sid].sigungu_code] += 1
 
     all_codes = set(cur.sigungu_meta) | set(prev.sigungu_meta)
     rows = []
@@ -299,22 +311,33 @@ def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed
             "opened": opened,
             "closed": closed,
             "renamed": renamed,
+            "stale": stale_by_sigungu.get(code, 0),
+            "unverified": unverified_by_sigungu.get(code, 0),
             "turnoverRate": turnover,
         })
     rows.sort(key=lambda r: r["code"])
     return rows, opened_by_sigungu, closed_by_sigungu
 
 
-def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids, out_dir: Path):
+def build_dong_files(
+    cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids, out_dir: Path,
+    stale_ids=frozenset(), unverified_ids=frozenset(),
+):
     opened_by_dong = Counter()
     closed_by_dong = Counter()
     renamed_by_dong = Counter()
+    stale_by_dong = Counter()
+    unverified_by_dong = Counter()
     for sid in opened_ids:
         opened_by_dong[cur.records[sid].dong_code] += 1
     for sid in closed_ids:
         closed_by_dong[prev.records[sid].dong_code] += 1
     for sid in renamed_cur_ids:
         renamed_by_dong[cur.records[sid].dong_code] += 1
+    for sid in stale_ids:
+        stale_by_dong[cur.records[sid].dong_code] += 1
+    for sid in unverified_ids:
+        unverified_by_dong[prev.records[sid].dong_code] += 1
 
     # sigungu_code -> [dong rows]
     by_sigungu: dict[str, list[dict]] = defaultdict(list)
@@ -353,6 +376,8 @@ def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_i
             "opened": opened,
             "closed": closed,
             "renamed": renamed,
+            "stale": stale_by_dong.get(dong_code, 0),
+            "unverified": unverified_by_dong.get(dong_code, 0),
             "turnoverRate": turnover,
             "top": top,
         })
@@ -512,7 +537,16 @@ def main():
         default=Path(__file__).resolve().parent / "region-code-map.json",
         help="이전 분기 시군구/행정동 코드를 현재 분기 기준으로 맞추는 매핑 파일",
     )
+    ap.add_argument(
+        "--license-map", type=Path, default=DEFAULT_LICENSE_MAP_PATH,
+        help="scripts/build-license.py 가 만든 store_license_map.ndjson 경로 "
+             "(없으면 이 보정 없이 기존 로직대로 동작)",
+    )
     args = ap.parse_args()
+
+    print(f"[build-data] 인허가 매핑 로드: {args.license_map}")
+    license_map = load_license_map(args.license_map)
+    print(f"  -> {len(license_map):,}건 (없으면 stale/unverified 보정 생략)")
 
     out_dir: Path = args.out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -586,14 +620,33 @@ def main():
     )
     print(f"  -> 최종 opened={len(final_opened_ids):,} closed={len(final_closed_ids):,} renamed={len(renamed_pairs):,}")
 
+    print("[build-data] 인허가데이터 보정(stale/unverified) 적용 중...")
+    stale_ids = set()
+    unverified_ids = set()
+    for sid in final_opened_ids:
+        if classify_opened(sid, license_map).new_k == 3:
+            stale_ids.add(sid)
+    for sid in final_closed_ids:
+        if classify_closed(sid, license_map).new_k == 4:
+            unverified_ids.add(sid)
+    licensed_opened_ids = final_opened_ids - stale_ids
+    licensed_closed_ids = final_closed_ids - unverified_ids
+    print(f"  -> stale(예전부터 영업, opened에서 제외)={len(stale_ids):,} "
+          f"unverified(인허가상 영업중, closed에서 제외)={len(unverified_ids):,}")
+    print(f"  -> 보정 후 opened={len(licensed_opened_ids):,} closed={len(licensed_closed_ids):,}")
+
     print("[build-data] sigungu.json 생성 중...")
     sigungu_rows, opened_by_sigungu, closed_by_sigungu = build_sigungu_json(
-        cur, prev, final_opened_ids, final_closed_ids, renamed_cur_ids,
+        cur, prev, licensed_opened_ids, licensed_closed_ids, renamed_cur_ids,
+        stale_ids=stale_ids, unverified_ids=unverified_ids,
     )
     (out_dir / "sigungu.json").write_text(json.dumps(sigungu_rows, ensure_ascii=False), encoding="utf-8")
 
     print("[build-data] dong/*.json 생성 중...")
-    dong_count = build_dong_files(cur, prev, final_opened_ids, final_closed_ids, renamed_cur_ids, out_dir / "dong")
+    dong_count = build_dong_files(
+        cur, prev, licensed_opened_ids, licensed_closed_ids, renamed_cur_ids, out_dir / "dong",
+        stale_ids=stale_ids, unverified_ids=unverified_ids,
+    )
 
     print("[build-data] upjong.json 생성 중...")
     upjong = build_upjong_json(cur, prev)
@@ -603,14 +656,16 @@ def main():
     rank_count = build_rank_files(cur, upjong, out_dir / "rank")
 
     print("[build-data] changes/*.json 생성 중...")
-    changes_count = build_changes_files(cur, prev, final_opened_ids, final_closed_ids, out_dir / "changes")
+    changes_count = build_changes_files(cur, prev, licensed_opened_ids, licensed_closed_ids, out_dir / "changes")
 
     totals = {
         "stores": cur.row_count,
         "prevStores": prev.row_count,
-        "opened": len(final_opened_ids),
-        "closed": len(final_closed_ids),
+        "opened": len(licensed_opened_ids),
+        "closed": len(licensed_closed_ids),
         "renamed": len(renamed_pairs),
+        "stale": len(stale_ids),
+        "unverified": len(unverified_ids),
     }
     checks["renumberMatching"] = {
         "rawOpened": len(raw_opened_ids),
@@ -637,11 +692,33 @@ def main():
             "점포로 교체됐을 가능성도 있다."
         ),
     }
+    license_as_of = None
+    license_report_path = args.license_map.parent / "report.json"
+    if license_report_path.exists():
+        try:
+            lr = json.loads(license_report_path.read_text(encoding="utf-8"))
+            dates = [
+                v.get("max_last_update")
+                for v in lr.get("localdata_per_file_stats", {}).values()
+                if v.get("max_last_update")
+            ]
+            if dates:
+                license_as_of = str(max(dates))
+        except (json.JSONDecodeError, OSError):
+            pass
+    license_matched_opened = sum(1 for v in license_map.values() if v.kind == "opened")
+    license_matched_closed = sum(1 for v in license_map.values() if v.kind == "closed")
+
     meta = {
         "current": args.current_quarter,
         "previous": args.previous_quarter,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "totals": totals,
+        "licenseSource": {
+            "file": str(args.license_map),
+            "asOf": license_as_of,
+            "matched": {"opened": license_matched_opened, "closed": license_matched_closed},
+        },
         "sourceNote": args.source_note or (
             "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 "
             "opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음. 상가업소번호가 "

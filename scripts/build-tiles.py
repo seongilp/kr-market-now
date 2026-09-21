@@ -60,6 +60,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
 from match import find_renamed_pairs, match_key, pair_ids_by_key  # noqa: E402
+from license import (  # noqa: E402
+    DEFAULT_LICENSE_MAP_PATH, classify_closed, classify_opened, load_license_map,
+)
 
 # 5개 분기 스냅샷 순서(오래된 -> 최신). opened/closed 의 기준 분기(첫/마지막)와
 # q 속성의 분기 순번은 모두 이 리스트 순서를 기준으로 한다.
@@ -188,7 +191,10 @@ def parse_coord(lon_raw: str, lat_raw: str):
     return lon, lat
 
 
-def make_feature(row: list[str], k: int, sigungu_code: str, q: int, prev_name: str | None = None) -> str:
+def make_feature(
+    row: list[str], k: int, sigungu_code: str, q: int, prev_name: str | None = None,
+    a: int | None = None, c: int | None = None,
+) -> str:
     name = row[NAME]
     branch = row[BRANCH]
     n = f"{name} {branch}" if branch else name
@@ -207,6 +213,10 @@ def make_feature(row: list[str], k: int, sigungu_code: str, q: int, prev_name: s
     }
     if prev_name:
         props["p"] = prev_name
+    if a is not None:
+        props["a"] = str(a)  # lib/map-tiles.ts TileProps.a 는 string(YYYYMMDD, ymd() 가 .length/.slice 사용)
+    if c is not None:
+        props["c"] = str(c)
     import json
 
     feature = {
@@ -240,7 +250,16 @@ def main():
         "--region-map", type=Path,
         default=Path(__file__).resolve().parent / "region-code-map.json",
     )
+    ap.add_argument(
+        "--license-map", type=Path, default=DEFAULT_LICENSE_MAP_PATH,
+        help="scripts/build-license.py 가 만든 store_license_map.ndjson 경로 "
+             "(없으면 이 보정 없이 기존 로직대로 동작)",
+    )
     args = ap.parse_args()
+
+    print(f"[build-tiles] 인허가 매핑 로드: {args.license_map}")
+    license_map = load_license_map(args.license_map)
+    print(f"  -> {len(license_map):,}건 (없으면 stale/unverified 보정 생략)")
 
     zip_by_quarter: dict[str, Path] = dict(args.zips)
     missing = [q for q in QUARTERS if q not in zip_by_quarter]
@@ -362,11 +381,14 @@ def main():
     args.ndjson.parent.mkdir(parents=True, exist_ok=True)
 
     opened_written = closed_written = renamed_written = 0
+    stale_written = unverified_written = 0
     opened_dropped = closed_dropped = renamed_dropped = 0
     opened_excluded_renumbered = closed_excluded_renumbered = 0
     opened_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
     closed_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
     renamed_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
+    stale_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
+    unverified_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
     # 3차(간판 바뀜 추정) 소멸 쪽에서 원래 상호명을 잡아뒀다가, 신규 쪽 피처의
     # "p"(이전 상호) 속성에 쓴다(첫 분기 스트리밍 중에 채움).
     rename_name_of: dict[str, str] = {}
@@ -389,14 +411,27 @@ def main():
                 sigungu_code = remapper.resolve_sigungu(sigungu_code, dong_name)
             own_key = match_key(row[NAME], row[ROAD_ADDR], row[FLOOR], row[HO])
             q = closed_q(store_id, own_key)
-            feature_line = make_feature(row, 0, sigungu_code, q)
+            reclass = classify_closed(store_id, license_map)
+            if reclass.new_k == 4:
+                # unverified: 인허가상 아직 영업 중 — closed 목록에서 빼고 별도 k=4 로 찍는다.
+                feature_line = make_feature(row, 4, sigungu_code, q, a=reclass.a, c=reclass.c)
+                if feature_line is None:
+                    closed_dropped += 1
+                    continue
+                out.write(feature_line)
+                out.write("\n")
+                unverified_written += 1
+                unverified_q_hist[q] += 1
+                continue
+            q_final = reclass.q_override if reclass.q_override is not None else q
+            feature_line = make_feature(row, 0, sigungu_code, q_final, a=reclass.a, c=reclass.c)
             if feature_line is None:
                 closed_dropped += 1
                 continue
             out.write(feature_line)
             out.write("\n")
             closed_written += 1
-            closed_q_hist[q] += 1
+            closed_q_hist[q_final] += 1
 
         print(f"[build-tiles] 최신 분기({last_quarter}) 스트리밍 -> 신규(opened, k=1)/간판바뀜(renamed, k=2) 판정")
         for row in iter_rows(last_zip):
@@ -421,25 +456,40 @@ def main():
                 renamed_written += 1
                 renamed_q_hist[q] += 1
                 continue
-            feature_line = make_feature(row, 1, sigungu_code, q)
+            reclass = classify_opened(store_id, license_map)
+            if reclass.new_k == 3:
+                # stale: 인허가상 이미 예전부터 영업 중(등록 지연) — opened 목록에서 빼고 k=3.
+                feature_line = make_feature(row, 3, sigungu_code, q, a=reclass.a, c=reclass.c)
+                if feature_line is None:
+                    opened_dropped += 1
+                    continue
+                out.write(feature_line)
+                out.write("\n")
+                stale_written += 1
+                stale_q_hist[q] += 1
+                continue
+            q_final = reclass.q_override if reclass.q_override is not None else q
+            feature_line = make_feature(row, 1, sigungu_code, q_final, a=reclass.a, c=reclass.c)
             if feature_line is None:
                 opened_dropped += 1
                 continue
             out.write(feature_line)
             out.write("\n")
             opened_written += 1
-            opened_q_hist[q] += 1
+            opened_q_hist[q_final] += 1
 
     print("\n=== 요약 ===")
     print(f"opened: written={opened_written:,} dropped(좌표 결측/이상치)={opened_dropped:,} "
-          f"제외(번호재부여)={opened_excluded_renumbered:,}")
-    print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}): {opened_q_hist}")
+          f"제외(번호재부여)={opened_excluded_renumbered:,} 제외(stale)={stale_written:,}")
+    print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}, 허가일 있으면 허가일분기로 덮어씀): {opened_q_hist}")
+    print(f"stale(k=3, 예전부터 영업/등록지연): written={stale_written:,} q분포(허가일분기): {stale_q_hist}")
+    print(f"unverified(k=4, 소멸인데 인허가상 영업중): written={unverified_written:,} q분포(마지막목격분기): {unverified_q_hist}")
     print(f"closed: written={closed_written:,} dropped(좌표 결측/이상치)={closed_dropped:,} "
-          f"제외(번호재부여)={closed_excluded_renumbered:,}")
-    print(f"  q 분포(1={closed_q_quarters[0]} .. 4={closed_q_quarters[-1]}): {closed_q_hist}")
+          f"제외(번호재부여)={closed_excluded_renumbered:,} 제외(unverified)={unverified_written:,}")
+    print(f"  q 분포(1={closed_q_quarters[0]} .. 4={closed_q_quarters[-1]}, 폐업일 있으면 폐업일분기로 덮어씀): {closed_q_hist}")
     print(f"renamed(k=2, 신규 쪽만 기록): written={renamed_written:,} dropped(좌표 결측/이상치)={renamed_dropped:,}")
     print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}): {renamed_q_hist}")
-    print(f"총 피처 수: {opened_written + closed_written + renamed_written:,}")
+    print(f"총 피처 수: {opened_written + closed_written + renamed_written + stale_written + unverified_written:,}")
     print(f"NDJSON: {args.ndjson}")
 
 

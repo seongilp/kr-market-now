@@ -97,6 +97,14 @@ export interface Meta {
       note: string;
     };
   };
+  /** 인허가데이터(scripts/build-license.py) 로 opened/closed 를 보정한 출처 정보.
+   * 구버전 데이터엔 없음. `matched` 는 전국 식품접객업 기준 매칭 건수(신규/소멸). */
+  licenseSource?: {
+    file: string;
+    /** 인허가데이터 기준일(YYYYMMDD, 없으면 null) */
+    asOf: string | null;
+    matched: { opened: number; closed: number };
+  };
 }
 
 /** data/sigungu.json 의 원소 하나 (전국 시군구 요약) */

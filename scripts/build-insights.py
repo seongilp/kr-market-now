@@ -44,6 +44,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
 from normalize import BRAND_NOISE, brand_is_noise, normalize_brand  # noqa: E402
 from match import find_renamed_pairs, resolve_opened_closed  # noqa: E402
+from license import (  # noqa: E402
+    DEFAULT_LICENSE_MAP_PATH, classify_closed, classify_opened, load_license_map,
+)
 
 # ---------------------------------------------------------------------------
 # 상수
@@ -683,7 +686,15 @@ def main():
         default=Path(__file__).resolve().parent / "region-code-map.json",
         help="이전 분기 시군구 코드를 현재 분기 기준으로 맞추는 매핑 파일",
     )
+    ap.add_argument(
+        "--license-map", type=Path, default=DEFAULT_LICENSE_MAP_PATH,
+        help="scripts/build-license.py 가 만든 store_license_map.ndjson 경로",
+    )
     args = ap.parse_args()
+
+    print(f"[build-insights] 인허가 매핑 로드: {args.license_map}")
+    license_map = load_license_map(args.license_map)
+    print(f"  -> {len(license_map):,}건")
 
     out_dir: Path = args.out
     (out_dir / "region").mkdir(parents=True, exist_ok=True)
@@ -757,6 +768,15 @@ def main():
         f"모호한 키 그룹 {renamed_ambiguous_groups:,}건) "
         f"-> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,} renamed={len(renamed_pairs):,}"
     )
+
+    print("[build-insights] 인허가데이터 보정(stale/unverified 제외) 적용 중 — "
+          "전환·브랜드 집계에서 신규/소멸 오판분을 뺀다...")
+    stale_ids = {sid for sid in opened_ids if classify_opened(sid, license_map).new_k == 3}
+    unverified_ids = {sid for sid in closed_ids if classify_closed(sid, license_map).new_k == 4}
+    opened_ids = opened_ids - stale_ids
+    closed_ids = closed_ids - unverified_ids
+    print(f"  -> stale 제외={len(stale_ids):,} unverified 제외={len(unverified_ids):,} "
+          f"-> 보정 후 opened={len(opened_ids):,} closed={len(closed_ids):,}")
 
     print("[build-insights] 업종 통계 계산 중...")
     nat_mid, nat_small, region_mid, region_small = build_upjong_stats(cur, prev, opened_ids, closed_ids)
