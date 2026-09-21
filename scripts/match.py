@@ -10,11 +10,25 @@
 번호만으로 diff 하면 이런 "번호만 바뀐 같은 가게"가 소멸+신규로 이중
 계산된다.
 
-그래서 신규/소멸 판정은 두 단계로 한다:
+그래서 신규/소멸 판정은 세 단계로 한다:
   1차: 상가업소번호 매칭 (기존 로직 — 두 스냅샷의 id 교집합은 "계속 영업 중").
   2차: 1차에서 짝을 못 찾은 것들끼리 (정규화 상호명, 도로명주소, 층, 호)
        키로 1:1 매칭. 매칭된 쌍은 "같은 가게, 번호만 바뀜"으로 보고
        신규·소멸 양쪽에서 제외한다.
+  3차("간판 바뀜 추정", renamed): 1·2차에서도 짝을 못 찾은 소멸/신규 중
+       (도로명주소, 층, 호, 상권업종소분류코드)가 같고 그 키 안에서
+       소멸 1개·신규 1개인 1:1 쌍만 "같은 자리·같은 세부업종, 간판만
+       바뀐 것으로 추정"하여 opened/closed 에서 제외하고 별도로
+       `renamed` 로 센다. 배경: 광명 철산역 스타벅스가 202603에는
+       상호 "철산역"(같은 업종)으로, 202606에는 "스타벅스 철산역"으로
+       등장해 번호·상호가 모두 바뀐 사례가 확인됐다(전국 스타벅스가
+       신규 2,112/소멸 1로 나온 것과 같은 현상 — 원본이 프랜차이즈
+       상호를 대량 정정한 것으로 추정). 이 경우 상호+주소로는 못
+       잇는다. 층·호가 둘 다 빈 값이면 한 건물에 여러 업소가 섞여
+       있을 위험이 커서 후보에서 아예 제외한다(호출부가 그 건수를
+       셀 수 있게 반환값에 포함). **주의**: 이 3차 매칭은 "같은
+       가게, 간판만 바뀜"이라는 추정이며, 실제로 같은 자리에서 업종만
+       같은 별개 점포로 교체됐을 가능성도 있다(추측).
 
 층/호까지 키에 포함하는 이유: 같은 건물(같은 도로명주소)에 여러 점포가
 있는 프랜차이즈·상가 건물에서 "상호명+주소"만 쓰면 다른 층/호의 별개
@@ -115,6 +129,85 @@ def find_renumbered_pairs(
         if (k := match_key(name, road, floor, ho)) is not None
     }
     return pair_ids_by_key(prev_key_of, cur_key_of)
+
+
+def rename_key(road: str, floor: str, ho: str, small_code: str) -> tuple[str, str, str, str] | None:
+    """3차("간판 바뀜 추정") 매칭 키: (도로명주소, 층, 호, 상권업종소분류코드).
+
+    도로명주소나 상권업종소분류코드가 없으면 키를 만들지 않는다. 층·호가
+    "둘 다" 빈 값이면(한 건물에 여러 업소가 섞여 있을 위험이 큼) 역시
+    키를 만들지 않는다 — 과매칭 방지가 최우선.
+    """
+    if not road or not small_code:
+        return None
+    floor = floor or ""
+    ho = ho or ""
+    if not floor and not ho:
+        return None
+    return (road, floor, ho, small_code)
+
+
+def find_renamed_pairs(
+    prev_only: dict[str, tuple[str, str, str, str]],
+    cur_only: dict[str, tuple[str, str, str, str]],
+):
+    """1·2차 매칭에서도 짝을 못 찾은 id들 사이에서 "간판 바뀜 추정" 쌍을 찾는다.
+
+    prev_only / cur_only: {id: (road, floor, ho, small_code)} — 1·2차 매칭 후
+    남은(=상대 스냅샷에 없고, 정규화 상호명 매칭도 안 된) id만 담아서 넘긴다.
+
+    반환: (matched_prev_ids, matched_cur_ids, pairs, excluded_both_empty,
+    ambiguous_groups)
+      - pairs: (prev_id, cur_id) 튜플 리스트 — 그 키에서 소멸 1개·신규 1개로
+        정확히 1:1인 경우만 담긴다.
+      - excluded_both_empty: 도로명주소는 있지만 층·호가 둘 다 빈 값이라
+        애초에 후보(키)가 못 된 레코드 수(prev+cur 합산, 참고용 — 이
+        레코드들은 opened/closed 로 그대로 남는다).
+      - ambiguous_groups: 같은 키에 소멸 또는 신규가 2개 이상이라 1:1이
+        아니게 되어 매칭하지 않고 건너뛴 키 그룹 수(과매칭 방지).
+    """
+    prev_key_of: dict[str, tuple] = {}
+    excluded_both_empty = 0
+    for sid, (road, floor, ho, small_code) in prev_only.items():
+        if road and small_code and not (floor or "") and not (ho or ""):
+            excluded_both_empty += 1
+            continue
+        k = rename_key(road, floor, ho, small_code)
+        if k is not None:
+            prev_key_of[sid] = k
+
+    cur_key_of: dict[str, tuple] = {}
+    for sid, (road, floor, ho, small_code) in cur_only.items():
+        if road and small_code and not (floor or "") and not (ho or ""):
+            excluded_both_empty += 1
+            continue
+        k = rename_key(road, floor, ho, small_code)
+        if k is not None:
+            cur_key_of[sid] = k
+
+    prev_by_key: dict[tuple, list[str]] = defaultdict(list)
+    for sid, k in prev_key_of.items():
+        prev_by_key[k].append(sid)
+    cur_by_key: dict[tuple, list[str]] = defaultdict(list)
+    for sid, k in cur_key_of.items():
+        cur_by_key[k].append(sid)
+
+    matched_prev: set[str] = set()
+    matched_cur: set[str] = set()
+    pairs: list[tuple[str, str]] = []
+    ambiguous_groups = 0
+
+    for k in sorted(set(prev_by_key) & set(cur_by_key)):
+        plist = sorted(prev_by_key[k])
+        clist = sorted(cur_by_key[k])
+        if len(plist) == 1 and len(clist) == 1:
+            matched_prev.add(plist[0])
+            matched_cur.add(clist[0])
+            pairs.append((plist[0], clist[0]))
+        else:
+            ambiguous_groups += 1
+
+    return matched_prev, matched_cur, pairs, excluded_both_empty, ambiguous_groups
 
 
 def resolve_opened_closed(

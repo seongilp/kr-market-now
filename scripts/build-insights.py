@@ -43,7 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
 from normalize import BRAND_NOISE, brand_is_noise, normalize_brand  # noqa: E402
-from match import resolve_opened_closed  # noqa: E402
+from match import find_renamed_pairs, resolve_opened_closed  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 상수
@@ -730,13 +730,37 @@ def main():
     )
     print(
         f"[build-insights] 재부여로 제외된 쌍: {len(renumbered_pairs):,} "
-        f"(모호한 키 그룹 {ambiguous_groups:,}건) -> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,}"
+        f"(모호한 키 그룹 {ambiguous_groups:,}건) -> 2차까지 opened={len(opened_ids):,} closed={len(closed_ids):,}"
+    )
+
+    print("[build-insights] 간판 바뀜 추정 매칭(3차: 도로명주소+층+호+상권업종소분류코드) 계산 중...")
+    rename_prev_only = {
+        sid: (prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho, prev.records[sid].small_code)
+        for sid in closed_ids
+    }
+    rename_cur_only = {
+        sid: (cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho, cur.records[sid].small_code)
+        for sid in opened_ids
+    }
+    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
+        find_renamed_pairs(rename_prev_only, rename_cur_only)
+    )
+    opened_ids = opened_ids - renamed_cur_ids
+    closed_ids = closed_ids - renamed_prev_ids
+    print(
+        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
+        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"모호한 키 그룹 {renamed_ambiguous_groups:,}건) "
+        f"-> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,} renamed={len(renamed_pairs):,}"
     )
 
     print("[build-insights] 업종 통계 계산 중...")
     nat_mid, nat_small, region_mid, region_small = build_upjong_stats(cur, prev, opened_ids, closed_ids)
 
     print("[build-insights] 업종 전환 계산 중...")
+    # 3차("간판 바뀜 추정") 쌍은 이미 같은 자리 매칭이므로 전환 목록에서 제외한다
+    # (opened_ids/closed_ids 가 이미 renamed 제외 상태라 자동으로 빠진다 — 같은
+    # 업종 재입점처럼 보이는 가짜 전환/뻥튀기 방지).
     nat_transitions, matched_total, region_transitions, region_examples = build_transitions(
         cur, prev, opened_ids, closed_ids
     )
@@ -766,6 +790,11 @@ def main():
             "rawClosed": len(raw_closed_ids),
             "matchedPairs": len(renumbered_pairs),
             "ambiguousKeyGroups": ambiguous_groups,
+        },
+        "renameMatching": {
+            "matchedPairs": len(renamed_pairs),
+            "excludedBothFloorHoEmpty": renamed_excluded_both_empty,
+            "ambiguousKeyGroups": renamed_ambiguous_groups,
         },
     }
     (out_dir / "national.json").write_text(json.dumps(national, ensure_ascii=False), encoding="utf-8")

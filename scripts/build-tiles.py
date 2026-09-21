@@ -12,7 +12,10 @@ opened/closed 여부는 기존과 같이 첫 분기(QUARTERS[0])↔마지막 분
 번호만 바뀜")가 소멸+신규로 이중 계산된다(2026-09-21 검증: 202603->202606 구간에서만
 신규 34만/소멸 30만으로 다른 구간의 2~4배였음). 그래서 번호가 안 맞는 것들끼리
 (정규화 상호명, 도로명주소, 층, 호) 키로 다시 매칭해(scripts/match.py) 짝이 맞는 쌍은
-신규·소멸 양쪽에서 제외한다(build-data.py/build-insights.py 와 같은 규칙).
+신규·소멸 양쪽에서 제외한다(build-data.py/build-insights.py 와 같은 규칙). 여기서도 짝을
+못 찾은 것들끼리는 다시 (도로명주소, 층, 호, 상권업종소분류코드) 3차 매칭으로 "간판 바뀜
+추정(renamed)"을 잡아낸다 — 이 쌍은 opened/closed 에서 빠지고, 신규 쪽 점 하나만
+`k=2`(renamed)로 찍히며 속성에 이전 상호(`p`)가 붙는다(scripts/match.py 참고).
 
 이번 확장은 그 사이 3개 분기 스냅샷을 추가로 읽어 "언제" 생기고 사라졌는지 분기 단위
 근사치(속성 `q`, 1~4)를 덧붙인다. 각 분기에 "있었는가"는 번호 또는 (정규화 상호명,
@@ -55,7 +58,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
-from match import match_key, pair_ids_by_key  # noqa: E402
+from match import find_renamed_pairs, match_key, pair_ids_by_key  # noqa: E402
 
 # 5개 분기 스냅샷 순서(오래된 -> 최신). opened/closed 의 기준 분기(첫/마지막)와
 # q 속성의 분기 순번은 모두 이 리스트 순서를 기준으로 한다.
@@ -76,6 +79,7 @@ ID = IDX["상가업소번호"]
 NAME = IDX["상호명"]
 BRANCH = IDX["지점명"]
 MID_NAME = IDX["상권업종중분류명"]
+SMALL_CODE = IDX["상권업종소분류코드"]
 SIGUNGU_CODE = IDX["시군구코드"]
 DONG_NAME = IDX["행정동명"]
 DONG_CODE = IDX["행정동코드"]
@@ -112,22 +116,27 @@ def iter_rows(zip_path: Path):
                     yield row
 
 
-def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple]]:
-    """id 집합과, id -> match_key(정규화 상호명, 도로명주소, 층, 호) 매핑을 한 번에 모은다.
+def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple], dict[str, tuple]]:
+    """id 집합, id -> match_key(정규화 상호명, 도로명주소, 층, 호) 매핑, id -> 3차("간판
+    바뀜 추정") 원시 필드(도로명주소, 층, 호, 상권업종소분류코드) 매핑을 한 번에 모은다.
 
-    키가 None(주소 없음/상호명 노이즈)인 행은 매핑에서 빠진다 — 번호 재부여
-    매칭 후보가 될 수 없다는 뜻(과매칭 방지, scripts/match.py 참고).
+    2차 키가 None(주소 없음/상호명 노이즈)인 행은 keys 매핑에서 빠진다 — 번호 재부여
+    매칭 후보가 될 수 없다는 뜻(과매칭 방지, scripts/match.py 참고). 3차 원시 필드는
+    (모든 행에 대해) 그대로 담아두고, 실제 키 계산(rename_key)과 None 필터링은
+    find_renamed_pairs 호출 시점에 한다.
     첫/마지막 분기(경계 매칭에 id->key 매핑이 필요한 쪽)에만 쓴다.
     """
     ids: set[str] = set()
     keys: dict[str, tuple] = {}
+    rename_fields: dict[str, tuple] = {}
     for row in iter_rows(zip_path):
         sid = row[ID]
         ids.add(sid)
         k = match_key(row[NAME], row[ROAD_ADDR], row[FLOOR], row[HO])
         if k is not None:
             keys[sid] = k
-    return ids, keys
+        rename_fields[sid] = (iv(row[ROAD_ADDR]), iv(row[FLOOR]), iv(row[HO]), iv(row[SMALL_CODE]))
+    return ids, keys, rename_fields
 
 
 def collect_ids_and_key_set(zip_path: Path) -> tuple[set[str], set[tuple]]:
@@ -174,7 +183,7 @@ def parse_coord(lon_raw: str, lat_raw: str):
     return lon, lat
 
 
-def make_feature(row: list[str], k: int, sigungu_code: str, q: int) -> str:
+def make_feature(row: list[str], k: int, sigungu_code: str, q: int, prev_name: str | None = None) -> str:
     name = row[NAME]
     branch = row[BRANCH]
     n = f"{name} {branch}" if branch else name
@@ -191,6 +200,8 @@ def make_feature(row: list[str], k: int, sigungu_code: str, q: int) -> str:
         "s": sigungu_code,
         "q": q,
     }
+    if prev_name:
+        props["p"] = prev_name
     import json
 
     feature = {
@@ -239,7 +250,7 @@ def main():
     closed_q_quarters = QUARTERS[:-1]
 
     print(f"[build-tiles] 최신 분기({last_quarter}) id/키 집합 수집: {last_zip}")
-    last_ids, last_keys = collect_ids_and_keys(last_zip)
+    last_ids, last_keys, last_rename_fields = collect_ids_and_keys(last_zip)
     print(f"  -> {len(last_ids):,} ids, {len(last_keys):,} 매칭 가능 키")
 
     print(f"[build-tiles] 최신 분기({last_quarter}) 행정동 인덱스 수집(remap 용): {last_zip}")
@@ -249,7 +260,7 @@ def main():
     remapper = RegionRemapper(region_map, cur_dong_by_sigungu)
 
     print(f"[build-tiles] 첫 분기({first_quarter}) id/키 집합 수집: {first_zip}")
-    first_ids, first_keys = collect_ids_and_keys(first_zip)
+    first_ids, first_keys, first_rename_fields = collect_ids_and_keys(first_zip)
     print(f"  -> {len(first_ids):,} ids, {len(first_keys):,} 매칭 가능 키")
 
     # 중간 3개 분기의 id 집합 + 키 집합(q 판정용, id 연결은 필요 없음). {분기: (set[str], set[tuple])}
@@ -291,9 +302,35 @@ def main():
         f"[build-tiles] 번호 재부여로 제외된 쌍: {len(renumbered_pairs):,} "
         f"(모호한 키 그룹 {ambiguous_groups:,}건)"
     )
-    final_closed_ids = raw_closed_ids - matched_prev
-    final_opened_ids = raw_opened_ids - matched_cur
-    print(f"  -> 최종 opened={len(final_opened_ids):,} closed={len(final_closed_ids):,}")
+    tier2_closed_ids = raw_closed_ids - matched_prev
+    tier2_opened_ids = raw_opened_ids - matched_cur
+    print(f"  -> 2차까지 opened={len(tier2_opened_ids):,} closed={len(tier2_closed_ids):,}")
+
+    # ------------------------------------------------------------------
+    # 간판 바뀜 추정 매칭(3차): 1·2차에서도 짝을 못 찾은 소멸/신규 중
+    # (도로명주소, 층, 호, 상권업종소분류코드)가 같고 1:1인 쌍만 "같은 자리,
+    # 간판만 바뀐 것으로 추정"하여 opened/closed 에서 빼고 renamed 로 센다
+    # (scripts/match.py 참고). build-data.py/build-insights.py 와 동일한
+    # 첫/마지막 분기(202506/202606) 조합이라 같은 결과가 나온다.
+    # ------------------------------------------------------------------
+    rename_prev_only = {sid: first_rename_fields[sid] for sid in tier2_closed_ids}
+    rename_cur_only = {sid: last_rename_fields[sid] for sid in tier2_opened_ids}
+    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
+        find_renamed_pairs(rename_prev_only, rename_cur_only)
+    )
+    prev_id_of_renamed_cur = {cur_id: prev_id for prev_id, cur_id in renamed_pairs}
+    print(
+        f"[build-tiles] 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
+        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"모호한 키 그룹 {renamed_ambiguous_groups:,}건)"
+    )
+
+    final_closed_ids = tier2_closed_ids - renamed_prev_ids
+    final_opened_ids = tier2_opened_ids - renamed_cur_ids
+    print(
+        f"  -> 최종 opened={len(final_opened_ids):,} closed={len(final_closed_ids):,} "
+        f"renamed={len(renamed_pairs):,}"
+    )
 
     def opened_q(store_id: str, own_key: tuple | None) -> int:
         """오래된 -> 최신 순으로 "처음 등장한" 분기의 1-based 순번.
@@ -317,11 +354,15 @@ def main():
 
     args.ndjson.parent.mkdir(parents=True, exist_ok=True)
 
-    opened_written = closed_written = 0
-    opened_dropped = closed_dropped = 0
+    opened_written = closed_written = renamed_written = 0
+    opened_dropped = closed_dropped = renamed_dropped = 0
     opened_excluded_renumbered = closed_excluded_renumbered = 0
     opened_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
     closed_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
+    renamed_q_hist = {1: 0, 2: 0, 3: 0, 4: 0}
+    # 3차(간판 바뀜 추정) 소멸 쪽에서 원래 상호명을 잡아뒀다가, 신규 쪽 피처의
+    # "p"(이전 상호) 속성에 쓴다(첫 분기 스트리밍 중에 채움).
+    rename_name_of: dict[str, str] = {}
 
     with args.ndjson.open("w", encoding="utf-8") as out:
         print(f"[build-tiles] 첫 분기({first_quarter}) 스트리밍 -> 소멸(closed, k=0) 판정")
@@ -332,6 +373,9 @@ def main():
             if store_id in matched_prev:
                 closed_excluded_renumbered += 1
                 continue  # 번호만 재부여됨: 소멸 아님
+            if store_id in renamed_prev_ids:
+                rename_name_of[store_id] = row[NAME]
+                continue  # 간판 바뀜 추정: 소멸 아님(renamed 로 별도 집계, 신규 쪽에서만 점을 찍음)
             sigungu_code = row[SIGUNGU_CODE]
             dong_name = row[DONG_NAME]
             if remapper.is_affected(sigungu_code):
@@ -347,7 +391,7 @@ def main():
             closed_written += 1
             closed_q_hist[q] += 1
 
-        print(f"[build-tiles] 최신 분기({last_quarter}) 스트리밍 -> 신규(opened, k=1) 판정")
+        print(f"[build-tiles] 최신 분기({last_quarter}) 스트리밍 -> 신규(opened, k=1)/간판바뀜(renamed, k=2) 판정")
         for row in iter_rows(last_zip):
             store_id = row[ID]
             if store_id in first_ids:
@@ -358,6 +402,18 @@ def main():
             sigungu_code = row[SIGUNGU_CODE]
             own_key = match_key(row[NAME], row[ROAD_ADDR], row[FLOOR], row[HO])
             q = opened_q(store_id, own_key)
+            if store_id in renamed_cur_ids:
+                prev_id = prev_id_of_renamed_cur.get(store_id)
+                prev_name = rename_name_of.get(prev_id, "") if prev_id else ""
+                feature_line = make_feature(row, 2, sigungu_code, q, prev_name=prev_name)
+                if feature_line is None:
+                    renamed_dropped += 1
+                    continue
+                out.write(feature_line)
+                out.write("\n")
+                renamed_written += 1
+                renamed_q_hist[q] += 1
+                continue
             feature_line = make_feature(row, 1, sigungu_code, q)
             if feature_line is None:
                 opened_dropped += 1
@@ -374,6 +430,8 @@ def main():
     print(f"closed: written={closed_written:,} dropped(좌표 결측/이상치)={closed_dropped:,} "
           f"제외(번호재부여)={closed_excluded_renumbered:,}")
     print(f"  q 분포(1={closed_q_quarters[0]} .. 4={closed_q_quarters[-1]}): {closed_q_hist}")
+    print(f"renamed(k=2, 신규 쪽만 기록): written={renamed_written:,} dropped(좌표 결측/이상치)={renamed_dropped:,}")
+    print(f"  q 분포(1={opened_q_quarters[0]} .. 4={opened_q_quarters[-1]}): {renamed_q_hist}")
     print(f"총 피처 수: {opened_written + closed_written:,}")
     print(f"NDJSON: {args.ndjson}")
 

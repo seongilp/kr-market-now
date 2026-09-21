@@ -92,6 +92,13 @@ export interface NationalInsights {
     matchedPairs: number;
     ambiguousKeyGroups: number;
   };
+  /** 간판 바뀜 추정 매칭(3차) 결과 요약 — data-types.ts 의 Meta.sanityChecks.renameMatching 과 동일한 값.
+   * matchedPairs 는 opened/closed/transitions 에서 빠지고 renamed 로만 센 쌍의 수. */
+  renameMatching?: {
+    matchedPairs: number;
+    excludedBothFloorHoEmpty: number;
+    ambiguousKeyGroups: number;
+  };
   /** 연도별(6월 기준) 업종 점포 수 추이. years 와 같은 길이의 배열.
    * 키는 업종 코드가 아니라 **업종명**이다(연도 사이 코드 재부여에 안전하도록). `yearlySeries()` 로 찾을 것 */
   yearly: {

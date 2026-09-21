@@ -40,6 +40,8 @@ export interface Meta {
     opened: number;
     /** 파생값: 이전 분기에만 있는 상가업소번호 수(소멸 추정) */
     closed: number;
+    /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정해 신규·소멸에서 뺀 수 */
+    renamed?: number;
   };
   /** 데이터 출처와 opened/closed 의 파생값 성격을 설명하는 문구 */
   sourceNote: string;
@@ -79,11 +81,24 @@ export interface Meta {
       ambiguousKeyGroups: number;
       note: string;
     };
+    /** "간판 바뀜 추정" 매칭(3차: 도로명주소+층+호+상권업종소분류코드) 결과 —
+     * matchedPairs 는 renamed 로 센 쌍의 수. excludedBothFloorHoEmpty 는
+     * 층·호가 둘 다 빈 값이라 애초에 후보(키)가 못 된 레코드 수(참고용,
+     * opened/closed 로 그대로 남음). ambiguousKeyGroups 는 같은 키에
+     * 소멸 또는 신규가 2개 이상이라 1:1이 아니게 되어 건너뛴 키 그룹 수. */
+    renameMatching?: {
+      matchedPairs: number;
+      excludedBothFloorHoEmpty: number;
+      ambiguousKeyGroups: number;
+      note: string;
+    };
   };
 }
 
 /** data/sigungu.json 의 원소 하나 (전국 시군구 요약) */
 export interface SigunguSummary {
+  /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정한 수(신규·소멸에서 제외됨). 구버전 데이터엔 없음 */
+  renamed?: number;
   /** 시군구코드(5자리, 원본 CSV의 시군구코드 컬럼) */
   code: string;
   /** 시도명 */
@@ -117,6 +132,8 @@ export interface DongSummary {
   opened: number;
   /** 파생값 */
   closed: number;
+  /** 파생값: 같은 자리·같은 세부업종에서 상호만 바뀐 것으로 추정한 수(신규·소멸에서 제외됨). 구버전 데이터엔 없음 */
+  renamed?: number;
   /** 파생값, 소수 3자리 */
   turnoverRate: number;
   /** 이 행정동에서 최신 분기 점포 수가 많은 업종중분류 상위 8개 */

@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
-from match import resolve_opened_closed  # noqa: E402
+from match import find_renamed_pairs, resolve_opened_closed  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # CSV 스펙 (39 컬럼, 확인됨)
@@ -62,6 +62,7 @@ LARGE_CODE = IDX["상권업종대분류코드"]
 LARGE_NAME = IDX["상권업종대분류명"]
 MID_CODE = IDX["상권업종중분류코드"]
 MID_NAME = IDX["상권업종중분류명"]
+SMALL_CODE = IDX["상권업종소분류코드"]
 SIDO_NAME = IDX["시도명"]
 SIGUNGU_CODE = IDX["시군구코드"]
 SIGUNGU_NAME = IDX["시군구명"]
@@ -82,7 +83,7 @@ Record = namedtuple(
     [
         "sigungu_code", "sigungu_name", "sido_name",
         "dong_code", "dong_name",
-        "mid_code", "mid_name", "large_code", "large_name",
+        "mid_code", "mid_name", "small_code", "large_code", "large_name",
         "name", "branch", "road", "floor", "ho", "lon", "lat",
     ],
 )
@@ -155,6 +156,7 @@ def parse_quarter(
                     dong_name = iv(row[DONG_NAME])
                     mid_code = iv(row[MID_CODE])
                     mid_name = iv(row[MID_NAME])
+                    small_code = iv(row[SMALL_CODE])
                     large_code = iv(row[LARGE_CODE])
                     large_name = iv(row[LARGE_NAME])
                     road = row[ROAD_ADDR]
@@ -188,7 +190,7 @@ def parse_quarter(
                     qs.records[store_id] = Record(
                         sigungu_code, sigungu_name, sido_name,
                         dong_code, dong_name,
-                        mid_code, mid_name, large_code, large_name,
+                        mid_code, mid_name, small_code, large_code, large_name,
                         row[NAME], row[BRANCH], road, floor, ho, lon, lat,
                     )
 
@@ -267,13 +269,16 @@ def run_sanity_checks(cur: QuarterStats, prev: QuarterStats) -> dict:
 # 산출물 빌더
 # ---------------------------------------------------------------------------
 
-def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids):
+def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids):
     opened_by_sigungu = Counter()
     closed_by_sigungu = Counter()
+    renamed_by_sigungu = Counter()
     for sid in opened_ids:
         opened_by_sigungu[cur.records[sid].sigungu_code] += 1
     for sid in closed_ids:
         closed_by_sigungu[prev.records[sid].sigungu_code] += 1
+    for sid in renamed_cur_ids:
+        renamed_by_sigungu[cur.records[sid].sigungu_code] += 1
 
     all_codes = set(cur.sigungu_meta) | set(prev.sigungu_meta)
     rows = []
@@ -283,6 +288,7 @@ def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed
         prev_stores = prev.sigungu_counter.get(code, 0)
         opened = opened_by_sigungu.get(code, 0)
         closed = closed_by_sigungu.get(code, 0)
+        renamed = renamed_by_sigungu.get(code, 0)
         turnover = round((opened + closed) / prev_stores, 3) if prev_stores else 0.0
         rows.append({
             "code": code,
@@ -292,19 +298,23 @@ def build_sigungu_json(cur: QuarterStats, prev: QuarterStats, opened_ids, closed
             "prevStores": prev_stores,
             "opened": opened,
             "closed": closed,
+            "renamed": renamed,
             "turnoverRate": turnover,
         })
     rows.sort(key=lambda r: r["code"])
     return rows, opened_by_sigungu, closed_by_sigungu
 
 
-def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, out_dir: Path):
+def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_ids, renamed_cur_ids, out_dir: Path):
     opened_by_dong = Counter()
     closed_by_dong = Counter()
+    renamed_by_dong = Counter()
     for sid in opened_ids:
         opened_by_dong[cur.records[sid].dong_code] += 1
     for sid in closed_ids:
         closed_by_dong[prev.records[sid].dong_code] += 1
+    for sid in renamed_cur_ids:
+        renamed_by_dong[cur.records[sid].dong_code] += 1
 
     # sigungu_code -> [dong rows]
     by_sigungu: dict[str, list[dict]] = defaultdict(list)
@@ -316,6 +326,7 @@ def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_i
         prev_stores = prev.dong_counter.get(dong_code, 0)
         opened = opened_by_dong.get(dong_code, 0)
         closed = closed_by_dong.get(dong_code, 0)
+        renamed = renamed_by_dong.get(dong_code, 0)
         turnover = round((opened + closed) / prev_stores, 3) if prev_stores else 0.0
 
         # top 8 업종중분류 (현재 개수 내림차순), delta = 현재 - 이전
@@ -341,6 +352,7 @@ def build_dong_files(cur: QuarterStats, prev: QuarterStats, opened_ids, closed_i
             "prevStores": prev_stores,
             "opened": opened,
             "closed": closed,
+            "renamed": renamed,
             "turnoverRate": turnover,
             "top": top,
         })
@@ -545,14 +557,37 @@ def main():
         f"  -> 재부여로 판정되어 제외된 쌍: {len(renumbered_pairs):,} "
         f"(모호한 키 그룹 {ambiguous_groups:,}건은 1:1로만 매칭)"
     )
-    print(f"  -> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,}")
+    print(f"  -> 2차까지 opened={len(opened_ids):,} closed={len(closed_ids):,}")
+
+    print("[build-data] 간판 바뀜 추정 매칭(3차: 도로명주소+층+호+상권업종소분류코드) 계산 중...")
+    rename_prev_only = {
+        sid: (prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho, prev.records[sid].small_code)
+        for sid in closed_ids
+    }
+    rename_cur_only = {
+        sid: (cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho, cur.records[sid].small_code)
+        for sid in opened_ids
+    }
+    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
+        find_renamed_pairs(rename_prev_only, rename_cur_only)
+    )
+    final_opened_ids = opened_ids - renamed_cur_ids
+    final_closed_ids = closed_ids - renamed_prev_ids
+    print(
+        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
+        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"모호한 키 그룹 {renamed_ambiguous_groups:,}건)"
+    )
+    print(f"  -> 최종 opened={len(final_opened_ids):,} closed={len(final_closed_ids):,} renamed={len(renamed_pairs):,}")
 
     print("[build-data] sigungu.json 생성 중...")
-    sigungu_rows, opened_by_sigungu, closed_by_sigungu = build_sigungu_json(cur, prev, opened_ids, closed_ids)
+    sigungu_rows, opened_by_sigungu, closed_by_sigungu = build_sigungu_json(
+        cur, prev, final_opened_ids, final_closed_ids, renamed_cur_ids,
+    )
     (out_dir / "sigungu.json").write_text(json.dumps(sigungu_rows, ensure_ascii=False), encoding="utf-8")
 
     print("[build-data] dong/*.json 생성 중...")
-    dong_count = build_dong_files(cur, prev, opened_ids, closed_ids, out_dir / "dong")
+    dong_count = build_dong_files(cur, prev, final_opened_ids, final_closed_ids, renamed_cur_ids, out_dir / "dong")
 
     print("[build-data] upjong.json 생성 중...")
     upjong = build_upjong_json(cur, prev)
@@ -562,13 +597,14 @@ def main():
     rank_count = build_rank_files(cur, upjong, out_dir / "rank")
 
     print("[build-data] changes/*.json 생성 중...")
-    changes_count = build_changes_files(cur, prev, opened_ids, closed_ids, out_dir / "changes")
+    changes_count = build_changes_files(cur, prev, final_opened_ids, final_closed_ids, out_dir / "changes")
 
     totals = {
         "stores": cur.row_count,
         "prevStores": prev.row_count,
-        "opened": len(opened_ids),
-        "closed": len(closed_ids),
+        "opened": len(final_opened_ids),
+        "closed": len(final_closed_ids),
+        "renamed": len(renamed_pairs),
     }
     checks["renumberMatching"] = {
         "rawOpened": len(raw_opened_ids),
@@ -581,6 +617,17 @@ def main():
             "제외한다(scripts/match.py 참고)."
         ),
     }
+    checks["renameMatching"] = {
+        "matchedPairs": len(renamed_pairs),
+        "excludedBothFloorHoEmpty": renamed_excluded_both_empty,
+        "ambiguousKeyGroups": renamed_ambiguous_groups,
+        "note": (
+            "1·2차 매칭에서도 짝을 못 찾은 소멸/신규 중 (도로명주소, 층, 호, 상권업종소분류코드)가 "
+            "같고 그 키 안에서 소멸 1개·신규 1개인 1:1 쌍만 '간판 바뀜 추정(renamed)'으로 보고 "
+            "opened/closed 에서 제외한다(scripts/match.py 참고). 추정이며, 실제로는 같은 자리에서 "
+            "업종만 같은 별개 점포로 교체됐을 가능성도 있다."
+        ),
+    }
     meta = {
         "current": args.current_quarter,
         "previous": args.previous_quarter,
@@ -590,7 +637,9 @@ def main():
             "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 "
             "opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음. 상가업소번호가 "
             "재부여된 경우(같은 가게, 번호만 바뀜)는 (정규화 상호명, 도로명주소, 층, 호) "
-            "2차 매칭으로 걸러내 신규/소멸 이중 계산을 줄인다."
+            "2차 매칭으로 걸러내 신규/소멸 이중 계산을 줄인다. 상호명까지 함께 바뀐 경우(간판 "
+            "바뀜 추정)는 (도로명주소, 층, 호, 상권업종소분류코드) 3차 매칭으로 걸러 별도로 "
+            "renamed 로 센다(추정치, 알려진 한계 있음 — sanityChecks.renameMatching 참고)."
         ),
         "sanityChecks": checks,
     }
