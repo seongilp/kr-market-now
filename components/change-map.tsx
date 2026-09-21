@@ -6,7 +6,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 
 import { QuarterLegend } from '@/components/quarter-legend';
 
-import { BASE_STYLE, KINDS, KIND_COLOR, KIND_LABEL, addChangeLayers, ensurePmtilesProtocol, setKindVisible, type Kind } from '@/lib/map-tiles';
+import { BASE_STYLE, KIND_COLOR, KIND_LABEL, TOGGLE_ORDER, addChangeLayers, ensurePmtilesProtocol, setKindVisible, type Kind } from '@/lib/map-tiles';
 
 export interface MapBounds {
   west: number;
@@ -59,7 +59,7 @@ export function ChangeMap({
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        {KINDS.slice().reverse().map((k) => (
+        {TOGGLE_ORDER.map((k) => (
           <Toggle key={k} on={show[k]} color={KIND_COLOR[k]} label={`${KIND_LABEL[k]}${counts[k] !== undefined ? ` ${counts[k].toLocaleString()}` : ''}`} onClick={() => setShow((s) => ({ ...s, [k]: !s[k] }))} />
         ))}
       </div>

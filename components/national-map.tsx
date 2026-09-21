@@ -10,10 +10,10 @@ import type { Dot } from '@/lib/data-types';
 import {
   BASE_STYLE,
   CLOSED_COLOR,
-  KINDS,
   KIND_COLOR,
   KIND_LABEL,
   OPENED_COLOR,
+  TOGGLE_ORDER,
   addChangeLayers,
   ensurePmtilesProtocol,
   escapeHtml,
@@ -135,7 +135,7 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
   return (
     <div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        {KINDS.slice().reverse().map((k) => (
+        {TOGGLE_ORDER.map((k) => (
           <Toggle key={k} on={show[k]} color={KIND_COLOR[k]} label={KIND_LABEL[k]} onClick={() => setShow((s) => ({ ...s, [k]: !s[k] }))} />
         ))}
         <span className="text-xs text-muted-foreground">

@@ -39,7 +39,9 @@ export const TILES_LAYER = 'changes';
 export const TILES_MIN_ZOOM = 6;
 
 export type Kind = 'opened' | 'closed' | 'renamed' | 'stale' | 'unverified';
+/** 그리는 순서(뒤가 위에 그려짐). 토글 표시는 TOGGLE_ORDER */
 export const KINDS: readonly Kind[] = ['unverified', 'stale', 'closed', 'renamed', 'opened'];
+export const TOGGLE_ORDER: readonly Kind[] = ['opened', 'closed', 'renamed', 'stale', 'unverified'];
 /** 타일 속성 k: 0 소멸, 1 신규, 2 같은 업종 교체, 3 예전부터 영업(등록 지연), 4 소멸 미확인(인허가상 영업 중) */
 const KIND_CODE: Record<Kind, number> = { closed: 0, opened: 1, renamed: 2, stale: 3, unverified: 4 };
 export const KIND_COLOR: Record<Kind, string> = {
