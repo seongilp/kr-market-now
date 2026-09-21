@@ -1,13 +1,13 @@
 {
   "current": "202606",
   "previous": "202506",
-  "generatedAt": "2026-09-21T09:35:13.832244+00:00",
+  "generatedAt": "2026-09-21T09:56:23.138184+00:00",
   "totals": {
     "stores": 2772484,
     "prevStores": 2697338,
-    "opened": 363886,
-    "closed": 288740,
-    "renamed": 13019
+    "opened": 362393,
+    "closed": 287247,
+    "renamed": 14512
   },
   "sourceNote": "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음. 상가업소번호가 재부여된 경우(같은 가게, 번호만 바뀜)는 (정규화 상호명, 도로명주소, 층, 호) 2차 매칭으로 걸러내 신규/소멸 이중 계산을 줄인다. 상호명까지 함께 바뀐 경우(간판 바뀜 추정)는 (도로명주소, 층, 호, 상권업종소분류코드) 3차 매칭으로 걸러 별도로 renamed 로 센다(추정치, 알려진 한계 있음 — sanityChecks.renameMatching 참고).",
   "sanityChecks": {
@@ -78,10 +78,11 @@
       "note": "1차(상가업소번호) 매칭에서 짝을 못 찾은 것들끼리 (정규화 상호명, 도로명주소, 층, 호) 키로 2차 매칭 — 같은 가게가 번호만 재부여된 경우를 신규/소멸 양쪽에서 제외한다(scripts/match.py 참고)."
     },
     "renameMatching": {
-      "matchedPairs": 13019,
-      "excludedBothFloorHoEmpty": 313023,
+      "matchedPairs": 14512,
+      "tier4SingleTenantPairs": 1493,
+      "excludedBothFloorHoEmpty": 301814,
       "ambiguousKeyGroups": 2145,
-      "note": "1·2차 매칭에서도 짝을 못 찾은 소멸/신규 중 (도로명주소, 층, 호, 상권업종소분류코드)가 같고 그 키 안에서 소멸 1개·신규 1개인 1:1 쌍만 '간판 바뀜 추정(renamed)'으로 보고 opened/closed 에서 제외한다(scripts/match.py 참고). 추정이며, 실제로는 같은 자리에서 업종만 같은 별개 점포로 교체됐을 가능성도 있다."
+      "note": "1·2차 매칭에서도 짝을 못 찾은 소멸/신규 중 (도로명주소, 층, 호, 상권업종소분류코드)가 같고 그 키 안에서 소멸 1개·신규 1개인 1:1 쌍만 '간판 바뀜 추정(renamed)'으로 보고 opened/closed 에서 제외한다(scripts/match.py 참고). 층·호가 둘 다 빈 값이라도 그 도로명주소의 점포 수가 이전·최신 분기 모두 정확히 1개(단독 입주 건물)면 4차 보정으로 포함한다(tier4SingleTenantPairs). 추정이며, 실제로는 같은 자리에서 업종만 같은 별개 점포로 교체됐을 가능성도 있다."
     }
   }
 }

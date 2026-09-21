@@ -559,7 +559,8 @@ def main():
     )
     print(f"  -> 2차까지 opened={len(opened_ids):,} closed={len(closed_ids):,}")
 
-    print("[build-data] 간판 바뀜 추정 매칭(3차: 도로명주소+층+호+상권업종소분류코드) 계산 중...")
+    print("[build-data] 간판 바뀜 추정 매칭(3+4차: 도로명주소+층+호+상권업종소분류코드, "
+          "+ 단독 입주 건물 보정) 계산 중...")
     rename_prev_only = {
         sid: (prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho, prev.records[sid].small_code)
         for sid in closed_ids
@@ -568,14 +569,19 @@ def main():
         sid: (cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho, cur.records[sid].small_code)
         for sid in opened_ids
     }
-    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
-        find_renamed_pairs(rename_prev_only, rename_cur_only)
-    )
+    # 4차 "단독 입주 건물" 보정용: 주소당 점포 수는 층/호 유무와 무관하게
+    # 그 분기 전체 데이터(diff 대상이 아닌 것 포함)에서 센다.
+    prev_addr_counts = Counter(r.road for r in prev.records.values() if r.road)
+    cur_addr_counts = Counter(r.road for r in cur.records.values() if r.road)
+    (
+        renamed_prev_ids, renamed_cur_ids, renamed_pairs,
+        renamed_excluded_both_empty, renamed_ambiguous_groups, renamed_tier4_pairs,
+    ) = find_renamed_pairs(rename_prev_only, rename_cur_only, prev_addr_counts, cur_addr_counts)
     final_opened_ids = opened_ids - renamed_cur_ids
     final_closed_ids = closed_ids - renamed_prev_ids
     print(
-        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
-        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} (그중 4차 단독 입주 보정 {len(renamed_tier4_pairs):,}건) "
+        f"(층/호 둘다 빈값+단독입주 아님이라 제외 {renamed_excluded_both_empty:,}건, "
         f"모호한 키 그룹 {renamed_ambiguous_groups:,}건)"
     )
     print(f"  -> 최종 opened={len(final_opened_ids):,} closed={len(final_closed_ids):,} renamed={len(renamed_pairs):,}")
@@ -619,13 +625,16 @@ def main():
     }
     checks["renameMatching"] = {
         "matchedPairs": len(renamed_pairs),
+        "tier4SingleTenantPairs": len(renamed_tier4_pairs),
         "excludedBothFloorHoEmpty": renamed_excluded_both_empty,
         "ambiguousKeyGroups": renamed_ambiguous_groups,
         "note": (
             "1·2차 매칭에서도 짝을 못 찾은 소멸/신규 중 (도로명주소, 층, 호, 상권업종소분류코드)가 "
             "같고 그 키 안에서 소멸 1개·신규 1개인 1:1 쌍만 '간판 바뀜 추정(renamed)'으로 보고 "
-            "opened/closed 에서 제외한다(scripts/match.py 참고). 추정이며, 실제로는 같은 자리에서 "
-            "업종만 같은 별개 점포로 교체됐을 가능성도 있다."
+            "opened/closed 에서 제외한다(scripts/match.py 참고). 층·호가 둘 다 빈 값이라도 그 "
+            "도로명주소의 점포 수가 이전·최신 분기 모두 정확히 1개(단독 입주 건물)면 4차 보정으로 "
+            "포함한다(tier4SingleTenantPairs). 추정이며, 실제로는 같은 자리에서 업종만 같은 별개 "
+            "점포로 교체됐을 가능성도 있다."
         ),
     }
     meta = {

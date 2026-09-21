@@ -733,7 +733,8 @@ def main():
         f"(모호한 키 그룹 {ambiguous_groups:,}건) -> 2차까지 opened={len(opened_ids):,} closed={len(closed_ids):,}"
     )
 
-    print("[build-insights] 간판 바뀜 추정 매칭(3차: 도로명주소+층+호+상권업종소분류코드) 계산 중...")
+    print("[build-insights] 간판 바뀜 추정 매칭(3+4차: 도로명주소+층+호+상권업종소분류코드, "
+          "+ 단독 입주 건물 보정) 계산 중...")
     rename_prev_only = {
         sid: (prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho, prev.records[sid].small_code)
         for sid in closed_ids
@@ -742,14 +743,17 @@ def main():
         sid: (cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho, cur.records[sid].small_code)
         for sid in opened_ids
     }
-    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
-        find_renamed_pairs(rename_prev_only, rename_cur_only)
-    )
+    prev_addr_counts = Counter(r.road for r in prev.records.values() if r.road)
+    cur_addr_counts = Counter(r.road for r in cur.records.values() if r.road)
+    (
+        renamed_prev_ids, renamed_cur_ids, renamed_pairs,
+        renamed_excluded_both_empty, renamed_ambiguous_groups, renamed_tier4_pairs,
+    ) = find_renamed_pairs(rename_prev_only, rename_cur_only, prev_addr_counts, cur_addr_counts)
     opened_ids = opened_ids - renamed_cur_ids
     closed_ids = closed_ids - renamed_prev_ids
     print(
-        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
-        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"  -> 간판 바뀜 추정 쌍: {len(renamed_pairs):,} (그중 4차 단독 입주 보정 {len(renamed_tier4_pairs):,}건) "
+        f"(층/호 둘다 빈값+단독입주 아님이라 제외 {renamed_excluded_both_empty:,}건, "
         f"모호한 키 그룹 {renamed_ambiguous_groups:,}건) "
         f"-> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,} renamed={len(renamed_pairs):,}"
     )
@@ -793,6 +797,7 @@ def main():
         },
         "renameMatching": {
             "matchedPairs": len(renamed_pairs),
+            "tier4SingleTenantPairs": len(renamed_tier4_pairs),
             "excludedBothFloorHoEmpty": renamed_excluded_both_empty,
             "ambiguousKeyGroups": renamed_ambiguous_groups,
         },

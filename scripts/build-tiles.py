@@ -54,6 +54,7 @@ import csv
 import io
 import sys
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -116,9 +117,10 @@ def iter_rows(zip_path: Path):
                     yield row
 
 
-def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple], dict[str, tuple]]:
+def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple], dict[str, tuple], Counter]:
     """id 집합, id -> match_key(정규화 상호명, 도로명주소, 층, 호) 매핑, id -> 3차("간판
-    바뀜 추정") 원시 필드(도로명주소, 층, 호, 상권업종소분류코드) 매핑을 한 번에 모은다.
+    바뀜 추정") 원시 필드(도로명주소, 층, 호, 상권업종소분류코드) 매핑, 도로명주소 ->
+    그 분기 전체 점포 수(4차 "단독 입주 건물" 보정용, 층/호 유무와 무관)를 한 번에 모은다.
 
     2차 키가 None(주소 없음/상호명 노이즈)인 행은 keys 매핑에서 빠진다 — 번호 재부여
     매칭 후보가 될 수 없다는 뜻(과매칭 방지, scripts/match.py 참고). 3차 원시 필드는
@@ -129,6 +131,7 @@ def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple], di
     ids: set[str] = set()
     keys: dict[str, tuple] = {}
     rename_fields: dict[str, tuple] = {}
+    addr_counts: Counter = Counter()
     for row in iter_rows(zip_path):
         sid = row[ID]
         ids.add(sid)
@@ -136,7 +139,9 @@ def collect_ids_and_keys(zip_path: Path) -> tuple[set[str], dict[str, tuple], di
         if k is not None:
             keys[sid] = k
         rename_fields[sid] = (iv(row[ROAD_ADDR]), iv(row[FLOOR]), iv(row[HO]), iv(row[SMALL_CODE]))
-    return ids, keys, rename_fields
+        if row[ROAD_ADDR]:
+            addr_counts[row[ROAD_ADDR]] += 1
+    return ids, keys, rename_fields, addr_counts
 
 
 def collect_ids_and_key_set(zip_path: Path) -> tuple[set[str], set[tuple]]:
@@ -250,7 +255,7 @@ def main():
     closed_q_quarters = QUARTERS[:-1]
 
     print(f"[build-tiles] 최신 분기({last_quarter}) id/키 집합 수집: {last_zip}")
-    last_ids, last_keys, last_rename_fields = collect_ids_and_keys(last_zip)
+    last_ids, last_keys, last_rename_fields, last_addr_counts = collect_ids_and_keys(last_zip)
     print(f"  -> {len(last_ids):,} ids, {len(last_keys):,} 매칭 가능 키")
 
     print(f"[build-tiles] 최신 분기({last_quarter}) 행정동 인덱스 수집(remap 용): {last_zip}")
@@ -260,7 +265,7 @@ def main():
     remapper = RegionRemapper(region_map, cur_dong_by_sigungu)
 
     print(f"[build-tiles] 첫 분기({first_quarter}) id/키 집합 수집: {first_zip}")
-    first_ids, first_keys, first_rename_fields = collect_ids_and_keys(first_zip)
+    first_ids, first_keys, first_rename_fields, first_addr_counts = collect_ids_and_keys(first_zip)
     print(f"  -> {len(first_ids):,} ids, {len(first_keys):,} 매칭 가능 키")
 
     # 중간 3개 분기의 id 집합 + 키 집합(q 판정용, id 연결은 필요 없음). {분기: (set[str], set[tuple])}
@@ -315,13 +320,15 @@ def main():
     # ------------------------------------------------------------------
     rename_prev_only = {sid: first_rename_fields[sid] for sid in tier2_closed_ids}
     rename_cur_only = {sid: last_rename_fields[sid] for sid in tier2_opened_ids}
-    renamed_prev_ids, renamed_cur_ids, renamed_pairs, renamed_excluded_both_empty, renamed_ambiguous_groups = (
-        find_renamed_pairs(rename_prev_only, rename_cur_only)
-    )
+    (
+        renamed_prev_ids, renamed_cur_ids, renamed_pairs,
+        renamed_excluded_both_empty, renamed_ambiguous_groups, renamed_tier4_pairs,
+    ) = find_renamed_pairs(rename_prev_only, rename_cur_only, first_addr_counts, last_addr_counts)
     prev_id_of_renamed_cur = {cur_id: prev_id for prev_id, cur_id in renamed_pairs}
     print(
         f"[build-tiles] 간판 바뀜 추정 쌍: {len(renamed_pairs):,} "
-        f"(층/호 둘다 빈값이라 제외 {renamed_excluded_both_empty:,}건, "
+        f"(그중 4차 단독 입주 보정 {len(renamed_tier4_pairs):,}건) "
+        f"(층/호 둘다 빈값+단독입주 아님이라 제외 {renamed_excluded_both_empty:,}건, "
         f"모호한 키 그룹 {renamed_ambiguous_groups:,}건)"
     )
 

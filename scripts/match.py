@@ -37,6 +37,22 @@
 소수 사례는 여전히 모호할 수 있음 — 호출부에서 `ambiguous_groups` 로
 그 규모를 셀 수 있다).
 
+4차("단독 입주 건물" 보정, 2026-09-21 추가): 3차가 "층·호 둘 다 빈 값이면
+제외"했기 때문에, 단독 건물 매장(그 도로명주소에 매장이 원래 한 곳뿐이라
+층·호를 아예 안 쓰는 경우 — 예: 광명 철산로 15 스타벅스가 202603엔 상호
+"철산역", 202606엔 "스타벅스 철산역"으로 등장, 층·호는 둘 다 공백)이
+3차에서 통째로 후보 탈락했다(검증: 313,023건). 이를 좁게 보정한다 — 층·호가
+둘 다 빈 값이라도, **그 도로명주소에 등록된 점포 수가 이전 분기에도
+정확히 1개, 최신 분기에도 정확히 1개**(=그 주소는 원래도 단독 입주였다는
+뜻, 다세대/상가 건물이면 자연히 2개 이상이라 자동 제외됨)이고 둘의
+상권업종소분류코드가 같으면 "간판 바뀜 추정"으로 묶는다. 주소당 점포 수는
+층·호 유무와 무관하게 그 분기 전체 데이터에서 센다(`find_renamed_pairs`
+호출부가 `prev_addr_counts`/`cur_addr_counts` 로 넘긴다 — 미리 계산해
+재사용, 이 모듈 안에서는 다시 세지 않는다). **주의**: 이 4차도 추정이다
+— "정확히 1개"는 "원래 단독 입주였다"는 신호일 뿐, 실제로 그 사이 건물이
+다세대로 바뀌었거나 원본 주소 표기가 우연히 겹쳤을 가능성은 배제 못
+한다(추측).
+
 이 모듈은 build-data.py / build-insights.py / build-tiles.py 세 스크립트가
 모두 import 해서 같은 규칙을 쓴다.
 """
@@ -150,27 +166,48 @@ def rename_key(road: str, floor: str, ho: str, small_code: str) -> tuple[str, st
 def find_renamed_pairs(
     prev_only: dict[str, tuple[str, str, str, str]],
     cur_only: dict[str, tuple[str, str, str, str]],
+    prev_addr_counts: dict[str, int] | None = None,
+    cur_addr_counts: dict[str, int] | None = None,
 ):
     """1·2차 매칭에서도 짝을 못 찾은 id들 사이에서 "간판 바뀜 추정" 쌍을 찾는다.
 
     prev_only / cur_only: {id: (road, floor, ho, small_code)} — 1·2차 매칭 후
     남은(=상대 스냅샷에 없고, 정규화 상호명 매칭도 안 된) id만 담아서 넘긴다.
 
+    prev_addr_counts / cur_addr_counts: {도로명주소: 그 분기 전체 점포 수}
+    (층·호 유무와 무관하게 그 분기 전체 데이터에서 미리 센 것 — 이 함수는
+    다시 세지 않는다). 둘 다 주어지면 4차("단독 입주 건물" 보정)를 적용한다
+    — 층·호가 둘 다 빈 값이라도 그 주소의 점포 수가 두 분기 모두 정확히
+    1개면 (도로명주소, "", "", 상권업종소분류코드) 키로 후보에 넣는다. 둘 중
+    하나라도 `None`이면(호출부가 안 넘기면) 4차 없이 기존 3차 규칙만 적용한다
+    (하위 호환).
+
     반환: (matched_prev_ids, matched_cur_ids, pairs, excluded_both_empty,
-    ambiguous_groups)
+    ambiguous_groups, tier4_pairs)
       - pairs: (prev_id, cur_id) 튜플 리스트 — 그 키에서 소멸 1개·신규 1개로
-        정확히 1:1인 경우만 담긴다.
-      - excluded_both_empty: 도로명주소는 있지만 층·호가 둘 다 빈 값이라
-        애초에 후보(키)가 못 된 레코드 수(prev+cur 합산, 참고용 — 이
-        레코드들은 opened/closed 로 그대로 남는다).
+        정확히 1:1인 경우만 담긴다(3차+4차 합산).
+      - excluded_both_empty: 도로명주소는 있지만 층·호가 둘 다 빈 값이고
+        4차 단독 입주 조건도 만족하지 못해 애초에 후보(키)가 못 된 레코드
+        수(prev+cur 합산, 참고용 — 이 레코드들은 opened/closed 로 그대로
+        남는다).
       - ambiguous_groups: 같은 키에 소멸 또는 신규가 2개 이상이라 1:1이
         아니게 되어 매칭하지 않고 건너뛴 키 그룹 수(과매칭 방지).
+      - tier4_pairs: pairs 중 4차(단독 입주 건물 보정)로 잡힌 쌍만 별도로
+        담은 리스트(검증/집계용 — pairs 의 부분집합).
     """
+    use_tier4 = prev_addr_counts is not None and cur_addr_counts is not None
+
+    def _is_singleton_addr(road: str) -> bool:
+        return use_tier4 and prev_addr_counts.get(road, 0) == 1 and cur_addr_counts.get(road, 0) == 1
+
     prev_key_of: dict[str, tuple] = {}
     excluded_both_empty = 0
     for sid, (road, floor, ho, small_code) in prev_only.items():
         if road and small_code and not (floor or "") and not (ho or ""):
-            excluded_both_empty += 1
+            if _is_singleton_addr(road):
+                prev_key_of[sid] = (road, "", "", small_code)
+            else:
+                excluded_both_empty += 1
             continue
         k = rename_key(road, floor, ho, small_code)
         if k is not None:
@@ -179,7 +216,10 @@ def find_renamed_pairs(
     cur_key_of: dict[str, tuple] = {}
     for sid, (road, floor, ho, small_code) in cur_only.items():
         if road and small_code and not (floor or "") and not (ho or ""):
-            excluded_both_empty += 1
+            if _is_singleton_addr(road):
+                cur_key_of[sid] = (road, "", "", small_code)
+            else:
+                excluded_both_empty += 1
             continue
         k = rename_key(road, floor, ho, small_code)
         if k is not None:
@@ -195,6 +235,7 @@ def find_renamed_pairs(
     matched_prev: set[str] = set()
     matched_cur: set[str] = set()
     pairs: list[tuple[str, str]] = []
+    tier4_pairs: list[tuple[str, str]] = []
     ambiguous_groups = 0
 
     for k in sorted(set(prev_by_key) & set(cur_by_key)):
@@ -204,10 +245,12 @@ def find_renamed_pairs(
             matched_prev.add(plist[0])
             matched_cur.add(clist[0])
             pairs.append((plist[0], clist[0]))
+            if k[1] == "" and k[2] == "":  # 층·호 둘 다 빈 값 = 4차 단독 입주 보정으로만 나올 수 있는 키
+                tier4_pairs.append((plist[0], clist[0]))
         else:
             ambiguous_groups += 1
 
-    return matched_prev, matched_cur, pairs, excluded_both_empty, ambiguous_groups
+    return matched_prev, matched_cur, pairs, excluded_both_empty, ambiguous_groups, tier4_pairs
 
 
 def resolve_opened_closed(
