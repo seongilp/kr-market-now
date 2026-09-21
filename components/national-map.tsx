@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
+import { QuarterLegend } from '@/components/quarter-legend';
+
 import type { Dot } from '@/lib/data-types';
 import {
   BASE_STYLE,
@@ -141,6 +143,7 @@ export function NationalMap({ dots }: { dots: Dot[] }) {
         className="h-[70vh] min-h-[420px] w-full overflow-hidden rounded-2xl border border-[#E5E8EB] bg-[#F9FAFB]"
         aria-label="전국 신규·소멸 점포 지도"
       />
+      <QuarterLegend />
     </div>
   );
 }

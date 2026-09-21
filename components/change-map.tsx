@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from 'react';
 import maplibregl, { type Map as MapLibreMap } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
+import { QuarterLegend } from '@/components/quarter-legend';
+
 import { BASE_STYLE, CLOSED_COLOR, OPENED_COLOR, addChangeLayers, ensurePmtilesProtocol, setKindVisible, type Kind } from '@/lib/map-tiles';
 
 export interface MapBounds {
@@ -66,6 +68,7 @@ export function ChangeMap({
         className="h-[420px] w-full overflow-hidden rounded-2xl border border-[#E5E8EB] bg-[#F9FAFB] sm:h-[560px]"
         aria-label={`${regionName} 신규·소멸 점포 지도`}
       />
+      <QuarterLegend />
     </div>
   );
 }
