@@ -325,6 +325,34 @@ def match_tier1(store: Store, by_name_road):
     return best
 
 
+def match_tier1b(store: Store, by_road):
+    """도로명주소 일치 + 상호명 "포함"관계(접두어) — tier1 의 완화판.
+
+    실측 사례: 소진공은 브랜드명만("스타벅스"), 인허가데이터는 지점명까지
+    ("스타벅스철산역점") 적는 경우가 흔하다. normalize_brand() 는 "...점"
+    패턴을 한 번만 벗기므로 "철산역"처럼 지점을 가리키는 중간 토큰까지는
+    못 없앤다 — 그래서 정확일치(tier1)로는 이런 쌍을 못 잡는다. 같은
+    건물(도로명주소 정확일치)이라는 강한 제약이 있을 때만, 정규화 상호명이
+    서로 접두어 관계(둘 중 하나가 다른 하나로 시작)면 같은 가게로 본다.
+    브랜드명이 통째로 다른 가게로 바뀌는(간판 교체) 경우는 이 조건을
+    만족 못 해 여기서 걸러지지 않는다(그런 경우는 안 잡는 게 맞음)."""
+    if not store.road:
+        return None
+    norm = normalize_brand(store.name)
+    if brand_is_noise(norm) or len(norm) < 2:
+        return None
+    cands = [c for c in by_road.get(store.road, [])
+             if not brand_is_noise(c["norm"]) and (c["norm"].startswith(norm) or norm.startswith(c["norm"]))]
+    if not cands:
+        return None
+    if len(cands) > 1:
+        # 모호하면 접두어가 가장 길게 겹치는(=더 구체적으로 같은) 것을 우선.
+        cands.sort(key=lambda c: -min(len(c["norm"]), len(norm)))
+        if len(cands[0]["norm"]) == len(cands[1]["norm"]):
+            return None  # 진짜 모호 — 포기
+    return cands[0]
+
+
 def match_tier2(store: Store, by_name, radius_m: float):
     if store.lon is None or store.lat is None:
         return None
@@ -468,6 +496,11 @@ def main():
                 matched[sid] = (r, "tier1_name+road", 0.0)
                 used_mgmt.add(r["mgmt_no"])
                 continue
+            r1b = match_tier1b(st, by_road)
+            if r1b is not None and r1b["mgmt_no"] not in used_mgmt:
+                matched[sid] = (r1b, "tier1b_road+nameprefix", 0.0)
+                used_mgmt.add(r1b["mgmt_no"])
+                continue
             res2 = match_tier2(st, by_name, args.radius_m)
             if res2 is not None:
                 r, d = res2
@@ -544,11 +577,14 @@ def main():
 
     report = {
         "note_추측표시": (
-            "매칭은 ①정규화상호명+도로명주소(첫콤마전) 정확일치 ②정규화상호명+좌표"
+            "매칭은 ①정규화상호명+도로명주소(첫콤마전) 정확일치 ①b같은 도로명주소+상호명"
+            "접두어관계(소진공 '스타벅스' vs 인허가 '스타벅스철산역점' 같이 지점명이 "
+            "붙는 흔한 케이스 보정, 모호하면 포기) ②정규화상호명+좌표"
             f"{args.radius_m:.0f}m ③도로명주소 단독(그 주소에 양쪽 다 미매칭 1개씩일 때만) "
             "순서로 시도. ③은 과제가 요청한 '층/호 단독' 대신 '도로명주소(건물)단독'을 "
             "쓴 근사(자유서식 층/호 텍스트 파싱이 불안정해 완화함) — 표시된 추측. "
-            "그 외 매칭 자체는 결정론적 키 매칭이라 근접매칭(②) 반경 안에서의 개별 오매칭"
+            "①b도 상호명이 통째로 다른(간판 교체) 경우는 못 잡으므로 그 자체가 근사/추측. "
+            "그 외(①②③) 매칭은 결정론적 키 매칭이라 근접매칭(②) 반경 안에서의 개별 오매칭"
             "가능성 외에는 추측이 아님."
         ),
         "radius_m": args.radius_m,
