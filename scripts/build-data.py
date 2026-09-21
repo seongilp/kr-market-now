@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
+from match import resolve_opened_closed  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # CSV 스펙 (39 컬럼, 확인됨)
@@ -67,6 +68,8 @@ SIGUNGU_NAME = IDX["시군구명"]
 DONG_CODE = IDX["행정동코드"]
 DONG_NAME = IDX["행정동명"]
 ROAD_ADDR = IDX["도로명주소"]
+FLOOR = IDX["층정보"]
+HO = IDX["호정보"]
 LON = IDX["경도"]
 LAT = IDX["위도"]
 
@@ -80,7 +83,7 @@ Record = namedtuple(
         "sigungu_code", "sigungu_name", "sido_name",
         "dong_code", "dong_name",
         "mid_code", "mid_name", "large_code", "large_name",
-        "name", "branch", "road", "lon", "lat",
+        "name", "branch", "road", "floor", "ho", "lon", "lat",
     ],
 )
 
@@ -155,6 +158,8 @@ def parse_quarter(
                     large_code = iv(row[LARGE_CODE])
                     large_name = iv(row[LARGE_NAME])
                     road = row[ROAD_ADDR]
+                    floor = row[FLOOR]
+                    ho = row[HO]
 
                     lon_raw, lat_raw = row[LON], row[LAT]
                     lon = lat = None
@@ -184,7 +189,7 @@ def parse_quarter(
                         sigungu_code, sigungu_name, sido_name,
                         dong_code, dong_name,
                         mid_code, mid_name, large_code, large_name,
-                        row[NAME], row[BRANCH], road, lon, lat,
+                        row[NAME], row[BRANCH], road, floor, ho, lon, lat,
                     )
 
                     qs.sigungu_meta.setdefault(sigungu_code, (sido_name, sigungu_name))
@@ -524,9 +529,23 @@ def main():
 
     print("[build-data] 정합성 체크 계산 중...")
     checks, cur_ids, prev_ids, common_ids = run_sanity_checks(cur, prev)
-    opened_ids = cur_ids - prev_ids
-    closed_ids = prev_ids - cur_ids
-    print(f"  -> opened={len(opened_ids):,} closed={len(closed_ids):,} common={len(common_ids):,}")
+    raw_opened_ids = cur_ids - prev_ids
+    raw_closed_ids = prev_ids - cur_ids
+    print(f"  -> raw opened={len(raw_opened_ids):,} raw closed={len(raw_closed_ids):,} common={len(common_ids):,}")
+
+    print("[build-data] 번호 재부여 매칭(정규화 상호명+도로명주소+층+호) 계산 중...")
+    cur_key_of = {sid: (cur.records[sid].name, cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho)
+                  for sid in raw_opened_ids}
+    prev_key_of = {sid: (prev.records[sid].name, prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho)
+                   for sid in raw_closed_ids}
+    opened_ids, closed_ids, renumbered_pairs, ambiguous_groups = resolve_opened_closed(
+        cur_ids, prev_ids, cur_key_of, prev_key_of,
+    )
+    print(
+        f"  -> 재부여로 판정되어 제외된 쌍: {len(renumbered_pairs):,} "
+        f"(모호한 키 그룹 {ambiguous_groups:,}건은 1:1로만 매칭)"
+    )
+    print(f"  -> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,}")
 
     print("[build-data] sigungu.json 생성 중...")
     sigungu_rows, opened_by_sigungu, closed_by_sigungu = build_sigungu_json(cur, prev, opened_ids, closed_ids)
@@ -551,6 +570,17 @@ def main():
         "opened": len(opened_ids),
         "closed": len(closed_ids),
     }
+    checks["renumberMatching"] = {
+        "rawOpened": len(raw_opened_ids),
+        "rawClosed": len(raw_closed_ids),
+        "matchedPairs": len(renumbered_pairs),
+        "ambiguousKeyGroups": ambiguous_groups,
+        "note": (
+            "1차(상가업소번호) 매칭에서 짝을 못 찾은 것들끼리 (정규화 상호명, 도로명주소, "
+            "층, 호) 키로 2차 매칭 — 같은 가게가 번호만 재부여된 경우를 신규/소멸 양쪽에서 "
+            "제외한다(scripts/match.py 참고)."
+        ),
+    }
     meta = {
         "current": args.current_quarter,
         "previous": args.previous_quarter,
@@ -558,7 +588,9 @@ def main():
         "totals": totals,
         "sourceNote": args.source_note or (
             "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 "
-            "opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음."
+            "opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음. 상가업소번호가 "
+            "재부여된 경우(같은 가게, 번호만 바뀜)는 (정규화 상호명, 도로명주소, 층, 호) "
+            "2차 매칭으로 걸러내 신규/소멸 이중 계산을 줄인다."
         ),
         "sanityChecks": checks,
     }

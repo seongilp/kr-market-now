@@ -34,7 +34,6 @@ import argparse
 import csv
 import io
 import json
-import re
 import sys
 import zipfile
 from collections import Counter, defaultdict, namedtuple
@@ -43,6 +42,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from region_remap import RegionRemapper, build_cur_dong_index, load_region_map  # noqa: E402
+from normalize import BRAND_NOISE, brand_is_noise, normalize_brand  # noqa: E402
+from match import resolve_opened_closed  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 상수
@@ -65,11 +66,6 @@ REQUIRED_COLUMNS = [
 KR_LAT_RANGE = (32.5, 39.5)
 KR_LON_RANGE = (124.0, 132.5)
 
-# 브랜드 노이즈 제외 목록(정규화 후 문자열 기준)
-BRAND_NOISE = {
-    "상호없음", "미정", "없음", "해당없음", "무상호", "상호미상", "상호",
-    "개인", "일반", "기타", "업소명없음", "상호명없음", "동일", "해당사항없음",
-}
 BRAND_MIN_STORES = 50
 BRAND_NATIONAL_TOP_N = 300
 BRAND_REGION_TOP_N = 30
@@ -97,52 +93,8 @@ def iv(s: str):
     return sys.intern(s) if s else s
 
 
-# ---------------------------------------------------------------------------
-# 브랜드 정규화
-# ---------------------------------------------------------------------------
-
-_LEGAL_FORM_TOKENS = ("주식회사", "㈜", "(주)", "유한회사")
-_BRANCH_SUFFIXES = ("직영점", "가맹점", "대리점", "본점", "지점")
-_GENERIC_JEOM_RE = re.compile(r"^(.{2,}?)(?:\d*호)?점$")
-_NON_ALNUM_RE = re.compile(r"[^0-9A-Za-z가-힣]")
-
-
-def normalize_brand(raw_name: str) -> str:
-    """상호명에서 브랜드명을 뽑는다. 지점명 컬럼은 애초에 쓰지 않는다(호출부 책임).
-
-    규칙(순서대로 적용):
-    1. "주식회사"/"㈜"/"(주)"/"유한회사" 같은 법인격 표기 제거
-    2. 괄호·공백·특수문자 전부 제거 (한글/영문/숫자만 남김)
-    3. 흔한 지점 접미사(직영점/가맹점/대리점/본점/지점) 제거 — 남는 길이가
-       2자 이상일 때만(짧아지는 게 더 위험하므로 보수적으로)
-    4. 그래도 남은 "...점" 패턴(예: "강남점", "1호점")을 한 번 더 제거
-       — 이 역시 남는 길이가 2자 이상일 때만
-
-    이후 "정규화된 전체 문자열이 같은 것"만 같은 브랜드로 묶는다(접두어
-    유사도로 묶지 않음 — 과잉 병합 방지).
-    """
-    s = raw_name.strip()
-    for tok in _LEGAL_FORM_TOKENS:
-        s = s.replace(tok, "")
-    s = _NON_ALNUM_RE.sub("", s)
-    if not s:
-        return s
-
-    for suf in _BRANCH_SUFFIXES:
-        if s.endswith(suf) and len(s) - len(suf) >= 2:
-            s = s[: -len(suf)]
-            break
-    else:
-        m = _GENERIC_JEOM_RE.match(s)
-        if m and len(m.group(1)) >= 2:
-            s = m.group(1)
-
-    return s
-
-
-def brand_is_noise(name: str) -> bool:
-    return len(name) < 2 or name in BRAND_NOISE
-
+# 브랜드 정규화(normalize_brand/brand_is_noise/BRAND_NOISE)는 scripts/normalize.py 로
+# 옮겨 scripts/match.py 와 공유한다(위 import 참고).
 
 # ---------------------------------------------------------------------------
 # CSV 스트리밍 파서
@@ -764,9 +716,22 @@ def main():
 
     cur_ids = set(cur.records.keys())
     prev_ids = set(prev.records.keys())
-    opened_ids = cur_ids - prev_ids
-    closed_ids = prev_ids - cur_ids
-    print(f"[build-insights] opened={len(opened_ids):,} closed={len(closed_ids):,}")
+    raw_opened_ids = cur_ids - prev_ids
+    raw_closed_ids = prev_ids - cur_ids
+    print(f"[build-insights] raw opened={len(raw_opened_ids):,} raw closed={len(raw_closed_ids):,}")
+
+    print("[build-insights] 번호 재부여 매칭(정규화 상호명+도로명주소+층+호) 계산 중...")
+    cur_key_of = {sid: (cur.records[sid].name, cur.records[sid].road, cur.records[sid].floor, cur.records[sid].ho)
+                  for sid in raw_opened_ids}
+    prev_key_of = {sid: (prev.records[sid].name, prev.records[sid].road, prev.records[sid].floor, prev.records[sid].ho)
+                   for sid in raw_closed_ids}
+    opened_ids, closed_ids, renumbered_pairs, ambiguous_groups = resolve_opened_closed(
+        cur_ids, prev_ids, cur_key_of, prev_key_of,
+    )
+    print(
+        f"[build-insights] 재부여로 제외된 쌍: {len(renumbered_pairs):,} "
+        f"(모호한 키 그룹 {ambiguous_groups:,}건) -> 최종 opened={len(opened_ids):,} closed={len(closed_ids):,}"
+    )
 
     print("[build-insights] 업종 통계 계산 중...")
     nat_mid, nat_small, region_mid, region_small = build_upjong_stats(cur, prev, opened_ids, closed_ids)
@@ -796,6 +761,12 @@ def main():
         "transitionMatched": matched_total,
         "brands": nat_brands,
         "yearly": yearly,
+        "renumberMatching": {
+            "rawOpened": len(raw_opened_ids),
+            "rawClosed": len(raw_closed_ids),
+            "matchedPairs": len(renumbered_pairs),
+            "ambiguousKeyGroups": ambiguous_groups,
+        },
     }
     (out_dir / "national.json").write_text(json.dumps(national, ensure_ascii=False), encoding="utf-8")
     nat_size = (out_dir / "national.json").stat().st_size

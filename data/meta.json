@@ -1,14 +1,14 @@
 {
   "current": "202606",
   "previous": "202506",
-  "generatedAt": "2026-09-20T13:48:08.470608+00:00",
+  "generatedAt": "2026-09-21T09:08:34.896599+00:00",
   "totals": {
     "stores": 2772484,
     "prevStores": 2697338,
-    "opened": 441767,
-    "closed": 366621
+    "opened": 376905,
+    "closed": 301759
   },
-  "sourceNote": "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음.",
+  "sourceNote": "소진공 상가(상권)정보 분기 스냅샷 두 개(최신/이전)를 상가업소번호로 비교해 opened/closed 를 추정한 파생 데이터. 원본에는 폐업 정보가 없음. 상가업소번호가 재부여된 경우(같은 가게, 번호만 바뀜)는 (정규화 상호명, 도로명주소, 층, 호) 2차 매칭으로 걸러내 신규/소멸 이중 계산을 줄인다.",
   "sanityChecks": {
     "id_intersection": {
       "common": 2330717,
@@ -68,6 +68,13 @@
     "malformed_rows": {
       "cur": 0,
       "prev": 0
+    },
+    "renumberMatching": {
+      "rawOpened": 441767,
+      "rawClosed": 366621,
+      "matchedPairs": 64862,
+      "ambiguousKeyGroups": 810,
+      "note": "1차(상가업소번호) 매칭에서 짝을 못 찾은 것들끼리 (정규화 상호명, 도로명주소, 층, 호) 키로 2차 매칭 — 같은 가게가 번호만 재부여된 경우를 신규/소멸 양쪽에서 제외한다(scripts/match.py 참고)."
     }
   }
 }

@@ -10,6 +10,15 @@
  * 시스템 정비로 바뀌는 경우가 있을 수 있어 완전히 정확한 개폐업 통계는
  * 아니라는 점에 유의할 것 — `Meta.sanityChecks.idIntersection` 을 통해
  * 이 가정이 얼마나 타당한지 확인할 수 있다.
+ *
+ * 2026-09-21 정정: 202606 회차에서 원본이 다수 점포의 상가업소번호를 새로
+ * 부여한 사례가 확인되어(예: 같은 자리 점포가 "옛 번호 소멸 + 새 번호 신규"로
+ * 이중 계산됨), 번호가 안 맞는 점포끼리 (정규화 상호명, 도로명주소, 층, 호)
+ * 키로 다시 매칭해(`scripts/match.py`) 짝이 맞는 쌍을 신규·소멸 양쪽에서
+ * 제외하도록 판정 규칙을 바꿨다 — `Meta.sanityChecks.renumberMatching` 참고.
+ * 단, 이 보정은 "번호만 바뀐" 경우만 잡아낸다 — 원본이 상호명까지 함께
+ * 바꾼 경우(예: 플레이스홀더 상호명을 실제 브랜드명으로 정정)는 여전히
+ * 신규로 남는다(알려진 한계, 추가 조사 필요).
  */
 
 /** data/meta.json */
@@ -58,6 +67,18 @@ export interface Meta {
     };
     encoding: string;
     malformed_rows: { cur: number; prev: number };
+    /** 번호 재부여 매칭(2차: 정규화 상호명+도로명주소+층+호) 결과 —
+     * rawOpened/rawClosed 는 상가업소번호만 본 원본 diff, matchedPairs 는
+     * "같은 가게, 번호만 바뀜"으로 판정되어 opened/closed 양쪽에서 제외된
+     * 쌍의 수. ambiguousKeyGroups 는 같은 키에 후보가 2개 이상이라 일부만
+     * 1:1로 매칭되고 나머지는 그대로 남은 키 그룹 수(과매칭 방지용 참고치). */
+    renumberMatching?: {
+      rawOpened: number;
+      rawClosed: number;
+      matchedPairs: number;
+      ambiguousKeyGroups: number;
+      note: string;
+    };
   };
 }
 
